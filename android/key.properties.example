@@ -1,0 +1,7 @@
+## Keep key.properties local only, never commit it.
+## Replace these placeholders on the machine that builds Android release packages.
+
+storePassword=CHANGE_ME_STORE_PASSWORD
+keyPassword=CHANGE_ME_KEY_PASSWORD
+keyAlias=CHANGE_ME_KEY_ALIAS
+storeFile=release.jks

@@ -1,0 +1,26 @@
+workflows:
+  ios-third-party-signing:
+    name: iOS unsigned IPA for third-party signing
+    max_build_duration: 60
+    instance_type: mac_mini_m2
+    environment:
+      flutter: stable
+      xcode: latest
+      cocoapods: default
+    scripts:
+      - name: Flutter pub get
+        script: |
+          flutter pub get
+      - name: Build iOS app without code signing
+        script: |
+          flutter build ios --release --no-codesign --dart-define=APP_ENV=prod
+      - name: Package unsigned IPA
+        script: |
+          rm -rf build/ios/unsigned_ipa
+          mkdir -p build/ios/unsigned_ipa/Payload
+          cp -R build/ios/iphoneos/Runner.app build/ios/unsigned_ipa/Payload/Runner.app
+          cd build/ios/unsigned_ipa
+          zip -qry ../Runner-unsigned-prod.ipa Payload
+    artifacts:
+      - build/ios/Runner-unsigned-prod.ipa
+      - build/ios/iphoneos/Runner.app
