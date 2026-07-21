@@ -40,14 +40,10 @@ class DataCollectHandler {
   Future<void> syncPendingTasks({String reason = 'manual'}) async {
     if (!supportsNativeCollect || _syncingPendingTasks) return;
     final deviceId = _session.deviceId;
-    final userId = ref.read(kvStoreProvider).getLoginInfo()?.userId ?? 0;
-    if (deviceId.isEmpty || userId <= 0) return;
+    if (deviceId.isEmpty) return;
     _syncingPendingTasks = true;
     try {
-      final tasks = await _api.listPendingTasks(
-        userId: userId,
-        deviceId: deviceId,
-      );
+      final tasks = await _api.listPendingTasks(deviceId: deviceId);
       if (tasks.isEmpty) return;
       log.i('[DataCollect] sync pending count=${tasks.length}, reason=$reason');
       for (final task in tasks) {

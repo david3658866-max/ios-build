@@ -30,6 +30,7 @@ abstract final class ChatImagePickerUtil {
       context,
       MediaPermissionScenario.chatAlbumImage,
     )) {
+      onToast?.call('未获得相册权限');
       return const [];
     }
     if (!context.mounted) return const [];
@@ -56,6 +57,10 @@ abstract final class ChatImagePickerUtil {
           MediaPermissionScenario.chatAlbumImage,
         );
       }
+      onToast?.call('未获得相册权限');
+      return const [];
+    } catch (e) {
+      onToast?.call('打开相册失败');
       return const [];
     }
     if (picked == null || picked.isEmpty) return const [];

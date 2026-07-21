@@ -8,12 +8,14 @@ class LineFallbackInterceptor extends Interceptor {
     required this.tryFallback,
     required this.getBaseUrl,
     required this.getDio,
+    this.onConnectionError,
     this.maxRetries = 3,
   });
 
   final Future<bool> Function() tryFallback;
   final String Function() getBaseUrl;
   final Dio Function() getDio;
+  final Future<void> Function(DioException err)? onConnectionError;
   final int maxRetries;
 
   @override
@@ -22,6 +24,7 @@ class LineFallbackInterceptor extends Interceptor {
       handler.next(err);
       return;
     }
+    await onConnectionError?.call(err);
     final retryCount = (err.requestOptions.extra['_lineRetryCount'] as int?) ?? 0;
     if (retryCount >= maxRetries) {
       handler.next(err);

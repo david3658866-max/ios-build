@@ -1,0 +1,2 @@
+﻿ 4246ms fail=False sec= conn=True healthy=False localChip=True chip=[本地调试 连接中 本地调试 连接中]
+ 7130ms fail=False sec= conn=False healthy=True localChip=True chip=[已切换至备用线路3]

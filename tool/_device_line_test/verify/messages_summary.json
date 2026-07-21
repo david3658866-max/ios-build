@@ -1,0 +1,26 @@
+﻿[
+    {
+        "pass":  1,
+        "sawFail":  true,
+        "sawSec":  false,
+        "sawSecAtMs":  null,
+        "sawConn":  true,
+        "sawLogCd":  false,
+        "sawLogAdopt":  false,
+        "flash":  true,
+        "healthy":  false,
+        "endChip":  ""
+    },
+    {
+        "pass":  2,
+        "sawFail":  true,
+        "sawSec":  false,
+        "sawSecAtMs":  null,
+        "sawConn":  true,
+        "sawLogCd":  false,
+        "sawLogAdopt":  false,
+        "flash":  true,
+        "healthy":  false,
+        "endChip":  ""
+    }
+]

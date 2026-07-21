@@ -26,6 +26,7 @@ class WsManager {
 
   Timer? _heartbeatTimer;
   Timer? _reconnectTimer;
+  Timer? _authTimeoutTimer;
   DateTime _lastConnectTime = DateTime.fromMillisecondsSinceEpoch(0);
 
   bool _autoReconnect = true;
@@ -76,7 +77,8 @@ class WsManager {
         if (!_isActive(myConnId)) return;
         
         _setStatus(WsStatus.authing);
-        // 杩炰笂绔嬪嵆鍙戠櫥褰曞寘 cmd0 {accessToken, devId}
+        _armAuthTimeout(myConnId);
+        // 连接后立即发登录包 cmd0 {accessToken, devId}
         _send({
           'cmd': CmdType.login,
           'data': {'accessToken': _token, 'devId': _devId},
@@ -126,17 +128,31 @@ class WsManager {
     final data = frame['data'];
 
     if (cmd == CmdType.login) {
-      // 鐧诲綍鎴愬姛
-      
+      _cancelAuthTimeout();
       _setStatus(WsStatus.connected);
       _startHeartbeat();
       onLoginSuccess?.call();
     } else if (cmd == CmdType.heartbeat) {
-      // 蹇冭烦鍥炴墽锛屾棤闇€澶勭悊锛堝績璺崇敱鍛ㄦ湡瀹氭椂鍣ㄩ┍鍔級
+      // 心跳回执，无需处理（心跳由周期定时器驱动）
     } else {
       
       _eventCtrl.add(WsEvent(cmd, data));
     }
+  }
+
+  void _armAuthTimeout(int connId) {
+    _cancelAuthTimeout();
+    _authTimeoutTimer = Timer(const Duration(seconds: 8), () {
+      if (!_isActive(connId)) return;
+      if (_status != WsStatus.authing) return;
+      // 鉴权超时：主动断开，便于上报与重连，避免长期卡在 authing。
+      _onDisconnected(connId);
+    });
+  }
+
+  void _cancelAuthTimeout() {
+    _authTimeoutTimer?.cancel();
+    _authTimeoutTimer = null;
   }
 
   void _send(Map<String, dynamic> frame) {
@@ -169,6 +185,7 @@ class WsManager {
 
   void _onDisconnected(int connId) {
     if (!_isActive(connId)) return;
+    _cancelAuthTimeout();
     _stopHeartbeat();
     _cleanupChannel();
     _setStatus(WsStatus.disconnected);
@@ -235,6 +252,7 @@ class WsManager {
   }) {
     
     _reconnectTimer?.cancel();
+    _cancelAuthTimeout();
     _stopHeartbeat();
     // 立即作废旧连接所有回调
     _connId++;
@@ -248,6 +266,7 @@ class WsManager {
     
     _autoReconnect = false;
     _reconnectTimer?.cancel();
+    _cancelAuthTimeout();
     _stopHeartbeat();
     _connId++; // 作废旧回调
     _cleanupChannel();

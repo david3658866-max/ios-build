@@ -1,0 +1,4 @@
+﻿ 4360ms fail=False sec= conn=True healthy=False chip=[消息 本地调试 连接中 本地调试 连接中]
+ 7320ms fail=False sec= conn=False healthy=True chip=[已切换至备用线路3]
+ 9583ms fail=False sec= conn=False healthy=True chip=[消息 备用线路3 备用线路3]
+11749ms fail=False sec= conn=False healthy=True chip=[消息 备用线路3 备用线路3]

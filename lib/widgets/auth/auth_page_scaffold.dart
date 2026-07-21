@@ -1,10 +1,14 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/config/app_constants.dart';
 import '../../core/di/app_providers.dart';
+import '../../core/utils/line_switch_util.dart';
 import '../../theme/auth_colors.dart';
 import '../../theme/rpx.dart';
+import '../im_toast.dart';
 import '../line_switcher.dart';
 import '../line_switcher_panel.dart';
 import 'auth_hero.dart';
@@ -31,11 +35,25 @@ class _AuthPageScaffoldState extends ConsumerState<AuthPageScaffold> {
   @override
   void initState() {
     super.initState();
-    // 对应 login.vue onShow → checkCurrentLineStatus()
+    // 登录/注册页：并发探活全部线路，不通则自动切到最快可用线。
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      ref.read(lineProvider.notifier).checkCurrentLineStatus(allowFallback: false);
+      unawaited(_probeAuthLines());
     });
+  }
+
+  Future<void> _probeAuthLines() async {
+    if (!mounted) return;
+    final fromId = ref.read(lineProvider).id;
+    final ok = await ref
+        .read(lineProvider.notifier)
+        .checkCurrentLineStatus(allowFallback: true);
+    if (!mounted) return;
+    final line = ref.read(lineProvider);
+    if (!ok) {
+      ImToast.show(context, LineSwitchUtil.allLinesFailedToast);
+    } else if (line.id != fromId) {
+      ImToast.show(context, LineSwitchUtil.autoSwitchToast(line.name));
+    }
   }
 
   @override

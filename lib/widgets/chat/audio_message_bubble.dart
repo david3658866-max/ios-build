@@ -2,10 +2,13 @@ import 'dart:convert';
 import 'dart:math' show pi;
 
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:just_audio/just_audio.dart';
 
+import '../../core/di/app_providers.dart';
 import '../../core/enums/message_status.dart';
 import '../../core/storage/app_database.dart';
+import '../../core/utils/file_download_util.dart';
 import '../../core/utils/group_sender_util.dart';
 import '../../theme/im_colors.dart';
 import '../../theme/im_icons.dart';
@@ -61,7 +64,7 @@ class ChatAudioPlayback {
 }
 
 /// 语音消息气泡。对齐 chat-message-item.vue `.message-audio`。
-class AudioMessageBubble extends StatefulWidget {
+class AudioMessageBubble extends ConsumerStatefulWidget {
   const AudioMessageBubble({
     super.key,
     required this.message,
@@ -80,10 +83,10 @@ class AudioMessageBubble extends StatefulWidget {
   final VoidCallback? onLongPress;
 
   @override
-  State<AudioMessageBubble> createState() => _AudioMessageBubbleState();
+  ConsumerState<AudioMessageBubble> createState() => _AudioMessageBubbleState();
 }
 
-class _AudioMessageBubbleState extends State<AudioMessageBubble> {
+class _AudioMessageBubbleState extends ConsumerState<AudioMessageBubble> {
   final _playback = ChatAudioPlayback.instance;
 
   String get _playKey => '${widget.message.id ?? widget.message.tmpId}';
@@ -175,7 +178,14 @@ class _AudioMessageBubbleState extends State<AudioMessageBubble> {
   @override
   Widget build(BuildContext context) {
     final content = _parse(widget.message.content);
-    final url = content['url']?.toString() ?? '';
+    final url = FileDownloadUtil.toAuthedMediaUrl(
+      apiBaseUrl: ref.read(lineProvider).baseUrl,
+      accessToken: ref.read(kvStoreProvider).accessToken,
+      fileId: content['fileId']?.toString(),
+      fileUrl: content['url']?.toString(),
+      role: 'origin',
+      preferDirect: content['useDirectMedia'] == true,
+    );
     final sending = widget.message.status == MessageStatus.sending;
     final mineBubble = widget.selfSend && !sending;
 

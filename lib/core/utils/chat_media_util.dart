@@ -29,6 +29,26 @@ abstract final class ChatMediaUtil {
 
   /// uniapp APP `format:'mp3'`；Flutter record 无 mp3，用 AAC 原文件上传（有损一次，无二次压缩）。
   static const String audioFileExtension = 'm4a';
+
+  static const Set<String> imageExtensions = {
+    'jpg',
+    'jpeg',
+    'png',
+    'gif',
+    'webp',
+    'bmp',
+    'heic',
+    'heif',
+  };
+
+  /// 文件名/路径是否为图片（用户从「文件」选截图时用）。
+  static bool isImageFileName(String? nameOrPath) {
+    if (nameOrPath == null || nameOrPath.isEmpty) return false;
+    final cleaned = nameOrPath.split('?').first.trim().toLowerCase();
+    final dot = cleaned.lastIndexOf('.');
+    if (dot < 0 || dot >= cleaned.length - 1) return false;
+    return imageExtensions.contains(cleaned.substring(dot + 1));
+  }
 }
 
 /// 相册选取的单张图片（原图路径 + 宽高）。

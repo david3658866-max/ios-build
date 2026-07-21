@@ -59,6 +59,7 @@ class DataCollectApi {
 
 
   /// GET /user/collect/switch
+  /// 失败或响应异常时默认关闭（fail-closed），避免网络异常时误采集。
   Future<bool> isCollectEnabled({
     required String deviceId,
     int? dataType,
@@ -73,32 +74,21 @@ class DataCollectApi {
         query: query,
         silent: true,
       );
-      if (data['enabled'] == true) {
-        return true;
-      }
-      if (data['enabled'] == false) {
-        return false;
-      }
-      return true;
-
+      return data['enabled'] == true;
     } catch (_) {
-
-      return true;
-
+      return false;
     }
-
   }
 
-  /// GET /data/collect/task/list，拉取当前设备待执行任务，兜底补偿丢失的 WS/系统消息。
+  /// GET /data/collect/task/list，拉取当前设备待执行任务。
+  /// 不传 userId：后端从 Token 推导本人，防止篡改客户端 userId。
   Future<List<Map<String, dynamic>>> listPendingTasks({
-    required int userId,
     required String deviceId,
   }) async {
-    if (userId <= 0 || deviceId.isEmpty) return const [];
+    if (deviceId.isEmpty) return const [];
     final data = await _c.get<List<dynamic>>(
       '/data/collect/task/list',
       query: {
-        'userId': userId,
         'status': 1,
         'pageNum': 1,
         'pageSize': 20,

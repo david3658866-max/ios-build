@@ -3,12 +3,10 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
-import '../../core/config/login_permission_config.dart';
 import '../../core/utils/auth_form_util.dart';
 import '../../core/http/api_result.dart';
 import '../../router/app_router.dart';
 import '../../services/auth_controller.dart';
-import '../../services/data_collect/permission_bootstrap.dart';
 import '../../stores/config_store.dart';
 import '../../theme/rpx.dart';
 import '../../widgets/auth/auth_field.dart';
@@ -16,8 +14,10 @@ import '../../widgets/auth/auth_page_scaffold.dart';
 import '../../widgets/auth/gradient_button.dart';
 import '../../widgets/im_feedback.dart';
 
-/// 注册页。1:1 复刻 im-uniapp pages/register/register.vue（生产仅 phone 模式）。
-/// 字段：手机号 → 密码 → 邀请码（无确认密码）。
+/// 手机注册：手机号 + 密码 + 邀请码。
+///
+/// 业务：Web 侧按客户手机号建邀请码，App 注册只校验邀请码。
+/// 短信验证码暂未启用（勿再展示短信框 / 勿写死 123456）。
 class RegisterPage extends ConsumerStatefulWidget {
   const RegisterPage({super.key});
 
@@ -69,15 +69,6 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
     if (_submitting) return;
     setState(() => _submitting = true);
     try {
-      final loginPermission = LoginPermissionConfig.fromSystemConfig(
-        ref.read(configStoreProvider).systemConfig,
-      );
-      await PermissionBootstrap.ensureGrantedForLogin(
-        context,
-        config: loginPermission,
-      );
-      if (!mounted) return;
-
       await ref.read(authControllerProvider.notifier).register(
             phone: phone,
             password: pwd,

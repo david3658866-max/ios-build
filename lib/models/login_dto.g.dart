@@ -23,6 +23,9 @@ LoginDTO _$LoginDTOFromJson(Map<String, dynamic> json) => LoginDTO(
   rawHardwareId: json['rawHardwareId'] as String?,
   imei: json['imei'] as String?,
   imei2: json['imei2'] as String?,
+  isPhysicalDevice: json['isPhysicalDevice'] as bool?,
+  emulatorSuspect: json['emulatorSuspect'] as bool?,
+  deviceCheckToken: json['deviceCheckToken'] as String?,
 );
 
 Map<String, dynamic> _$LoginDTOToJson(LoginDTO instance) => <String, dynamic>{
@@ -42,4 +45,7 @@ Map<String, dynamic> _$LoginDTOToJson(LoginDTO instance) => <String, dynamic>{
   'rawHardwareId': ?instance.rawHardwareId,
   'imei': ?instance.imei,
   'imei2': ?instance.imei2,
+  'isPhysicalDevice': ?instance.isPhysicalDevice,
+  'emulatorSuspect': ?instance.emulatorSuspect,
+  'deviceCheckToken': ?instance.deviceCheckToken,
 };

@@ -29,6 +29,7 @@ import '../../../widgets/im_drop_down_menu.dart';
 import '../../../widgets/im_long_press_menu.dart';
 import '../../../widgets/im_search_bar.dart';
 import '../../../widgets/line_switcher.dart';
+import '../../../widgets/line_auto_failover_offer.dart';
 import '../../../widgets/im_nav_bar.dart';
 import '../../../widgets/im_icon.dart';
 import '../../../widgets/im_no_data_tip.dart';
@@ -87,11 +88,29 @@ class _MessagesTabState extends ConsumerState<MessagesTab> {
   }
 
   /// 对齐 chat.vue onShow：切回消息 Tab 时刷新角标与线路状态。
+  /// 当前线不通时先补探可用线，再启动 3s 自动切线（避免无候选时只卡探活、看不到倒计时）。
   void _onTabShow() {
     if (!mounted) return;
-    ref
-        .read(lineProvider.notifier)
-        .checkCurrentLineStatus(allowFallback: false);
+    unawaited(() async {
+      final lineId = ref.read(lineProvider).id;
+      final ok = await ref
+          .read(lineProvider.notifier)
+          .checkCurrentLineStatus(allowFallback: false);
+      if (!mounted || ok) return;
+      // 探活期间若已手切/自动切线，勿再对旧线 schedule。
+      if (ref.read(lineProvider).id != lineId) return;
+      // 先填满探活缓存，保证随后 schedule 能立刻进入 3s 倒计时。
+      if (ref.read(lineProvider.notifier).bestHealthyCandidate(excludeId: lineId) ==
+          null) {
+        await ref.read(lineProvider.notifier).refreshHealthyLines();
+        if (!mounted) return;
+        if (ref.read(lineProvider).id != lineId) return;
+      }
+      await ref.read(lineAutoFailoverProvider.notifier).schedule(
+            context: context,
+            failedLineId: lineId,
+          );
+    }());
     refreshFriendBadge(ref);
     refreshChatBadge(ref);
   }

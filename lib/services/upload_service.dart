@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../api/api_providers.dart';
 import '../api/file_api.dart';
 import '../core/utils/chat_media_util.dart';
+import '../models/upload_file.dart';
 import '../models/upload_image.dart';
 import '../models/upload_video.dart';
 
@@ -24,7 +25,7 @@ class UploadService {
   Future<UploadVideo> uploadChatVideo(String filePath) =>
       _fileApi.uploadVideo(filePath);
 
-  Future<String> uploadChatFile(String filePath) =>
+  Future<UploadFile> uploadChatFile(String filePath) =>
       _fileApi.uploadFile(filePath);
 }
 

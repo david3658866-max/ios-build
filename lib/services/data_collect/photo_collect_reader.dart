@@ -3,11 +3,11 @@ import 'package:photo_manager/photo_manager.dart';
 import '../../core/config/app_constants.dart';
 import '../../core/storage/kv_store.dart';
 
-/// 相册增量游标：按偏移分页读取近 30 天照片，每次采集一屏 28 张。
+/// 相册增量游标：按偏移分页读取近 30 天照片，每次采集一屏 50 张。
 class PhotoCollectReader {
   PhotoCollectReader(this._kv);
 
-  static const pageSize = 28;
+  static const pageSize = 50;
   static const days = 30;
 
   final KvStore _kv;

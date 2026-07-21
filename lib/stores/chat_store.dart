@@ -29,6 +29,7 @@ import '../core/utils/message_storage_util.dart';
 import '../core/utils/message_tmp_id.dart';
 import '../core/utils/message_send_queue.dart';
 import '../core/utils/chat_media_meta_util.dart';
+import '../core/utils/chat_media_util.dart';
 import '../services/upload_service.dart';
 
 /// 会话 / 消息状态。对应原 Pinia chatStore（drift 单一数据源替代冷热分区）。
@@ -1115,8 +1116,17 @@ class ChatStore {
     await insertPrivate(pending, incrementUnread: false);
 
     try {
-      final url = await ref.read(uploadServiceProvider).uploadChatFile(localPath);
-      final contentJson = jsonEncode({'name': name, 'size': size, 'url': url});
+      final uploaded =
+          await ref.read(uploadServiceProvider).uploadChatFile(localPath);
+      final contentMap = <String, dynamic>{
+        'name': name,
+        'size': size,
+        'url': uploaded.url,
+      };
+      if (uploaded.fileId != null) {
+        contentMap['fileId'] = uploaded.fileId;
+      }
+      final contentJson = jsonEncode(contentMap);
       await _db.messageDao.updateByTmpId(tmpId, content: contentJson);
 
       final sent = await ref.read(messageApiProvider).sendPrivate(
@@ -1171,8 +1181,17 @@ class ChatStore {
     await insertGroup(pending, incrementUnread: false);
 
     try {
-      final url = await ref.read(uploadServiceProvider).uploadChatFile(localPath);
-      final contentJson = jsonEncode({'name': name, 'size': size, 'url': url});
+      final uploaded =
+          await ref.read(uploadServiceProvider).uploadChatFile(localPath);
+      final contentMap = <String, dynamic>{
+        'name': name,
+        'size': size,
+        'url': uploaded.url,
+      };
+      if (uploaded.fileId != null) {
+        contentMap['fileId'] = uploaded.fileId;
+      }
+      final contentJson = jsonEncode(contentMap);
       await _db.messageDao.updateByTmpId(tmpId, content: contentJson);
 
       final sent = await ref.read(messageApiProvider).sendGroup(
@@ -1225,9 +1244,16 @@ class ChatStore {
     await insertPrivate(pending, incrementUnread: false);
 
     try {
-      final url =
+      final uploaded =
           await ref.read(uploadServiceProvider).uploadChatFile(localPath);
-      final contentJson = jsonEncode({'url': url, 'duration': duration});
+      final contentMap = <String, dynamic>{
+        'url': uploaded.url,
+        'duration': duration,
+      };
+      if (uploaded.fileId != null) {
+        contentMap['fileId'] = uploaded.fileId;
+      }
+      final contentJson = jsonEncode(contentMap);
       await _db.messageDao.updateByTmpId(tmpId, content: contentJson);
 
       final sent = await ref.read(messageApiProvider).sendPrivate(
@@ -1278,9 +1304,16 @@ class ChatStore {
     await insertGroup(pending, incrementUnread: false);
 
     try {
-      final url =
+      final uploaded =
           await ref.read(uploadServiceProvider).uploadChatFile(localPath);
-      final contentJson = jsonEncode({'url': url, 'duration': duration});
+      final contentMap = <String, dynamic>{
+        'url': uploaded.url,
+        'duration': duration,
+      };
+      if (uploaded.fileId != null) {
+        contentMap['fileId'] = uploaded.fileId;
+      }
+      final contentJson = jsonEncode(contentMap);
       await _db.messageDao.updateByTmpId(tmpId, content: contentJson);
 
       final sent = await ref.read(messageApiProvider).sendGroup(
@@ -1596,7 +1629,14 @@ class ChatStore {
     if (type == MessageType.audio) return '[语音]';
     if (type == MessageType.actRtVoice) return '[语音通话]';
     if (type == MessageType.actRtVideo) return '[视频通话]';
-    if (type == MessageType.file) return '[文件]';
+    if (type == MessageType.file) {
+      try {
+        final map = jsonDecode(content) as Map<String, dynamic>;
+        final name = (map['name'] ?? '').toString();
+        if (ChatMediaUtil.isImageFileName(name)) return '[图片]';
+      } catch (_) {}
+      return '[文件]';
+    }
     if (type == MessageType.userCard) {
       try {
         final map = jsonDecode(content) as Map<String, dynamic>;

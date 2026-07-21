@@ -1,0 +1,20 @@
+﻿[
+    {
+        "pass":  1,
+        "sawFail":  true,
+        "sawSec":  false,
+        "sawSecAtMs":  null,
+        "flash":  false,
+        "healthy":  true,
+        "endChip":  "已切换至备用线路3"
+    },
+    {
+        "pass":  2,
+        "sawFail":  true,
+        "sawSec":  false,
+        "sawSecAtMs":  null,
+        "flash":  false,
+        "healthy":  true,
+        "endChip":  "备用线路2 备用线路2"
+    }
+]

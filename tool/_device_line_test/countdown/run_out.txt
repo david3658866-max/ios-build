@@ -1,0 +1,30 @@
+STR ok Fail=连接失败 Local=本地调试 Retry=重新检测
+boot chip=[备用线路2 备用线路2] fail=False conn=False
+
+======== PASS 1 ========
+TAP chip 备用线路2 备用线路2 902,162
+TAP retry 934,272
+TAP chip 备用线路2 备用线路2 902,162
+TAP local 806,388
+ 7060ms fail=False sec= conn=False healthy=True localChip=False chip=[已切换至备用线路3]
+ 9243ms fail=False sec= conn=False healthy=True localChip=False chip=[备用线路3 备用线路3]
+12211ms fail=False sec= conn=False healthy=True localChip=False chip=[备用线路3 备用线路3]
+NOTE: missed fail/countdown window; auto-recovered to 备用线路3 备用线路3
+RESULT {"pass":1,"sawFail":true,"sawSec":false,"sawSecAtMs":null,"flash":false,"healthy":true,"endChip":"备用线路3 备用线路3"}
+Wait 32s debounce...
+
+======== PASS 2 ========
+TAP chip 备用线路3 备用线路3 902,162
+TAP retry 934,272
+TAP chip 备用线路3 备用线路3 902,162
+TAP local 806,388
+ 7064ms fail=False sec= conn=False healthy=True localChip=False chip=[已切换至主线路]
+ 9258ms fail=False sec= conn=False healthy=True localChip=False chip=[主线路 主线路]
+12303ms fail=False sec= conn=False healthy=True localChip=False chip=[主线路 主线路]
+NOTE: missed fail/countdown window; auto-recovered to 主线路 主线路
+RESULT {"pass":2,"sawFail":true,"sawSec":false,"sawSecAtMs":null,"flash":false,"healthy":true,"endChip":"主线路 主线路"}
+
+======== SUMMARY ========
+pass1: fail=True countdown=False@ms auto=True(备用线路3 备用线路3) flash=False => OK
+pass2: fail=True countdown=False@ms auto=True(主线路 主线路) flash=False => OK
+ALL OK

@@ -1,0 +1,24 @@
+﻿[
+    {
+        "page":  "messages",
+        "pass":  1,
+        "sawFail":  true,
+        "sawSec":  false,
+        "sawSecAtMs":  null,
+        "sawConn":  true,
+        "flash":  false,
+        "healthy":  true,
+        "endChip":  "消息 备用线路3 备用线路3"
+    },
+    {
+        "page":  "messages",
+        "pass":  2,
+        "sawFail":  true,
+        "sawSec":  false,
+        "sawSecAtMs":  null,
+        "sawConn":  false,
+        "flash":  false,
+        "healthy":  true,
+        "endChip":  "消息 备用线路3 备用线路3"
+    }
+]

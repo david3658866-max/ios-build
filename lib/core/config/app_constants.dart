@@ -4,7 +4,7 @@ abstract final class AppConstants {
   static const String appName = '星语';
 
   /// 客户端版本号（随登录上送 clientVersion）。后续接 package_info 后改为动态读取。
-  static const String appVersion = '1.0.0';
+  static const String appVersion = '1.0.3';
 
   /// 是否开放 App 检查/热更新（对齐 im-uniapp `.env.js` UPGRADE_ENABLED）。
   static const bool upgradeEnabled = false;
@@ -47,18 +47,30 @@ abstract final class StorageKeys {
   /// 当前线路 id（同 line_config 的 kLineStorageKey）。
   static const String lineId = 'app_line_id';
 
+  /// 远程线路配置版本。
+  static const String lineConfigVersion = 'line_config_version';
+
+  /// 远程线路配置 JSON 数组。
+  static const String lineConfigJson = 'line_config_json';
+
   /// 上次登录手机号（login.vue onLoad 回填）。
   static const String loginPhone = 'loginPhone';
 
   /// 上次登录密码（login.vue onLoad 回填）。
   static const String password = 'password';
 
-  /// 通讯录权限引导上次提示日期（friend.vue checkContactsPermissionGuide）。
-  static const String contactsGuideLastDate = 'contacts_guide_last_date';
-
   /// 是否已同意服务协议与隐私政策（policy.vue `has_read_privacy`）。
   static const String hasReadPrivacy = 'has_read_privacy';
 
   /// 相册采集游标偏移（按 deviceId 后缀存储）。
   static const String photoCollectCursorOffset = 'photoCollectCursorOffset';
+
+  /// Flutter 线路事件本地待上报队列。
+  static const String lineEventQueue = 'line_event_queue';
+
+  /// 匿名安装标识（随机 UUID，不使用硬件标识）。
+  static const String lineEventInstallId = 'line_event_install_id';
+
+  /// 当前 App 启动会话标识。
+  static const String lineEventSessionId = 'line_event_session_id';
 }

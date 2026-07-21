@@ -349,8 +349,8 @@ class _GroupInfoPageState extends ConsumerState<GroupInfoPage>
     context.push(AppRoutes.groupInvitePath(widget.groupId));
   }
 
-  void _onEditGroup(bool isManager) {
-    context.push(AppRoutes.groupEditPath(widget.groupId, isManager: isManager));
+  void _onEditGroup() {
+    context.push(AppRoutes.groupEditPath(widget.groupId));
   }
 
   void _onShowQrcode(bool isAllowInvite) {
@@ -541,8 +541,6 @@ class _GroupInfoPageState extends ConsumerState<GroupInfoPage>
     final dissolved = group?.dissolve ?? false;
     final isOwner = group != null &&
         GroupPermissionUtil.isOwner(mineId: mineId, ownerId: group.ownerId);
-    final isManager =
-        GroupPermissionUtil.isManager(mineId: mineId, members: members);
     final allowInvite = group != null &&
         GroupPermissionUtil.canInvite(
           group: group,
@@ -593,7 +591,7 @@ class _GroupInfoPageState extends ConsumerState<GroupInfoPage>
                       quit: quit,
                       ownerName: _ownerName(group, members) ?? '',
                       onShowQrcode: () => _onShowQrcode(allowInvite),
-                      onEditGroup: () => _onEditGroup(isManager),
+                      onEditGroup: _onEditGroup,
                     ),
                     if (!quit) ...[
                       ImBarGroup(

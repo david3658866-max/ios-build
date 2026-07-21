@@ -1,9 +1,12 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/di/app_providers.dart';
 import '../../core/enums/message_status.dart';
 import '../../core/enums/message_type.dart';
+import '../../core/utils/file_download_util.dart';
 import '../../core/utils/message_long_press_util.dart';
 import '../../core/utils/quote_message_util.dart';
 import '../../models/quote_message.dart';
@@ -12,7 +15,7 @@ import '../../theme/rpx.dart';
 import 'emotion_text.dart';
 
 /// 气泡内引用块。对齐 chat-quote-message.vue。
-class ChatQuoteMessage extends StatelessWidget {
+class ChatQuoteMessage extends ConsumerWidget {
   const ChatQuoteMessage({
     super.key,
     required this.quote,
@@ -29,7 +32,7 @@ class ChatQuoteMessage extends StatelessWidget {
   final MessageLongPressCallback? onLongPress;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final recalled = quote.status == MessageStatus.recall;
     final labelStyle = TextStyle(
       fontSize: rpx(context, 24),
@@ -63,19 +66,19 @@ class ChatQuoteMessage extends StatelessWidget {
                     style: labelStyle.copyWith(fontWeight: FontWeight.w600),
                   ),
                   SizedBox(width: rpx(context, 12)),
-                  Flexible(child: _quoteBody(context, labelStyle)),
+                  Flexible(child: _quoteBody(context, ref, labelStyle)),
                 ],
               ),
       ),
     );
   }
 
-  Widget _quoteBody(BuildContext context, TextStyle style) {
+  Widget _quoteBody(BuildContext context, WidgetRef ref, TextStyle style) {
     switch (quote.type) {
       case MessageType.image:
-        return _thumbImage(context, 'thumbUrl');
+        return _thumbImage(context, ref, 'thumbUrl', 'thumb');
       case MessageType.video:
-        return _thumbImage(context, 'coverUrl');
+        return _thumbImage(context, ref, 'coverUrl', 'cover');
       case MessageType.text:
         return EmotionText(
           text: quote.content ?? '',
@@ -84,7 +87,8 @@ class ChatQuoteMessage extends StatelessWidget {
         );
       default:
         return Text(
-          QuoteMessageUtil.previewOfQuote(quote, showName).replaceFirst('$showName: ', ''),
+          QuoteMessageUtil.previewOfQuote(quote, showName)
+              .replaceFirst('$showName: ', ''),
           style: style,
           maxLines: 2,
           overflow: TextOverflow.ellipsis,
@@ -92,13 +96,29 @@ class ChatQuoteMessage extends StatelessWidget {
     }
   }
 
-  Widget _thumbImage(BuildContext context, String key) {
-    String? url;
+  Widget _thumbImage(
+    BuildContext context,
+    WidgetRef ref,
+    String key,
+    String role,
+  ) {
+    String? raw;
+    String? fileId;
     try {
       final map = jsonDecode(quote.content ?? '{}');
-      if (map is Map) url = map[key]?.toString();
+      if (map is Map) {
+        raw = map[key]?.toString();
+        fileId = map['fileId']?.toString();
+      }
     } catch (_) {}
-    if (url == null || url.isEmpty) {
+    final url = FileDownloadUtil.toAuthedMediaUrl(
+      apiBaseUrl: ref.read(lineProvider).baseUrl,
+      accessToken: ref.read(kvStoreProvider).accessToken,
+      fileId: fileId,
+      fileUrl: raw,
+      role: role,
+    );
+    if (url.isEmpty) {
       return Text('[图片]', style: TextStyle(fontSize: rpx(context, 24)));
     }
     return ClipRRect(

@@ -65,7 +65,8 @@ android {
             } else {
                 signingConfigs.getByName("debug")
             }
-            // 即便当前未开 minify，也挂上规则，避免以后开 R8 时 ML Kit 被裁掉导致扫一扫 NPE
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",

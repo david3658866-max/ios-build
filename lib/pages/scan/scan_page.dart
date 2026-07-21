@@ -5,9 +5,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
+import 'package:url_launcher/url_launcher.dart';
+
 import '../../api/api_providers.dart';
 import '../../core/utils/media_permission_util.dart';
 import '../../core/utils/scan_util.dart';
+import '../../core/utils/trusted_url_util.dart';
 import '../../router/app_router.dart';
 import '../../widgets/im_confirm_dialog.dart';
 import '../../widgets/im_feedback.dart';
@@ -191,13 +194,38 @@ class _ScanPageState extends ConsumerState<ScanPage> {
           await _safeRestartPreview();
         }
       case ScanActionType.externalLink:
-        if (!mounted) return;
-        context.pop();
-        context.push(AppRoutes.externalLinkPath(action.url ?? raw));
+        await _handleExternalLink(action.url ?? raw);
       case ScanActionType.plainText:
         if (!mounted) return;
         _showPlainDialog('扫描结果', action.text ?? raw);
     }
+  }
+
+  Future<void> _handleExternalLink(String url) async {
+    if (!mounted) return;
+    if (TrustedUrlUtil.isTrustedHttpUrl(url)) {
+      context.pop();
+      context.push(AppRoutes.externalLinkPath(url));
+      return;
+    }
+    final ok = await showImConfirmDialog(
+      context,
+      title: '外链风险提示',
+      content: '该链接不在可信域名内，应用内打开存在风险。是否使用系统浏览器打开？\n\n$url',
+      confirmText: '用浏览器打开',
+      cancelText: '取消',
+    );
+    if (!mounted) return;
+    if (ok == true) {
+      final uri = Uri.tryParse(url);
+      if (uri != null) {
+        await launchUrl(uri, mode: LaunchMode.externalApplication);
+      }
+      if (mounted) context.pop();
+      return;
+    }
+    _handled = false;
+    await _safeRestartPreview();
   }
 
   Future<void> _handleLoginQr(String qrCode) async {

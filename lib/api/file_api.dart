@@ -3,6 +3,7 @@ import 'package:dio/dio.dart';
 import 'package:path/path.dart' as p;
 
 import '../core/http/dio_client.dart';
+import '../models/upload_file.dart';
 import '../models/upload_image.dart';
 import '../models/upload_video.dart';
 
@@ -48,18 +49,22 @@ class FileApi {
     return UploadVideo.fromJson(data);
   }
 
-  /// POST /file/upload。返回文件 url 字符串。
-  Future<String> uploadFile(String filePath) async {
+  /// POST /file/upload。带 X-File-Upload:v2 取 {fileId,url}；无该头时服务端仍可能返回 url 字符串。
+  Future<UploadFile> uploadFile(String filePath) async {
     final form = FormData.fromMap({
       'file': await MultipartFile.fromFile(
         filePath,
         filename: p.basename(filePath),
       ),
     });
-    return _c.post<String>(
+    final data = await _c.post<dynamic>(
       '/file/upload',
       data: form,
-      options: Options(sendTimeout: const Duration(minutes: 2)),
+      options: Options(
+        sendTimeout: const Duration(minutes: 2),
+        headers: const {'X-File-Upload': 'v2'},
+      ),
     );
+    return UploadFile.fromResponse(data);
   }
 }

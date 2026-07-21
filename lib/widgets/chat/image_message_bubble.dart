@@ -4,25 +4,23 @@ import 'dart:io';
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/di/app_providers.dart';
 import '../../core/enums/message_status.dart';
 import '../../core/utils/chat_media_util.dart';
-
+import '../../core/utils/file_download_util.dart';
 import '../../core/storage/app_database.dart';
-
 import '../../core/utils/group_sender_util.dart';
-
 import '../../theme/im_colors.dart';
-
 import '../../theme/rpx.dart';
-
+import '../image_preview_dialog.dart';
 import 'chat_sender_name_row.dart';
-
 import 'message_send_status.dart';
 
 /// 图片消息气泡。对齐 chat-message-item.vue `.message-image`。
 
-class ImageMessageBubble extends StatefulWidget {
+class ImageMessageBubble extends ConsumerStatefulWidget {
   const ImageMessageBubble({
     super.key,
 
@@ -53,10 +51,10 @@ class ImageMessageBubble extends StatefulWidget {
   final ValueChanged<String>? onContentChanged;
 
   @override
-  State<ImageMessageBubble> createState() => _ImageMessageBubbleState();
+  ConsumerState<ImageMessageBubble> createState() => _ImageMessageBubbleState();
 }
 
-class _ImageMessageBubbleState extends State<ImageMessageBubble> {
+class _ImageMessageBubbleState extends ConsumerState<ImageMessageBubble> {
   bool _thumbLoad = false;
   final Set<String> _failedDisplayUrls = <String>{};
 
@@ -147,16 +145,7 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
                           color: sending
                               ? Colors.transparent
                               : const Color(0xFFF4F6FA),
-
                           borderRadius: radius,
-
-                          border: sending
-                              ? null
-                              : Border.all(
-                                  color: ImColors.bubbleImageBorder,
-
-                                  width: rpx(context, 6),
-                                ),
                         ),
 
                         clipBehavior: Clip.antiAlias,
@@ -266,15 +255,46 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
   List<String> _displayCandidates(Map<String, dynamic> content) {
     final urls = <String>[];
     if (_thumbLoad) {
-      _addIfNotBlank(urls, content['previewUrl']);
-      _addIfNotBlank(urls, content['originUrl']);
-      _addIfNotBlank(urls, content['thumbUrl']);
+      _addMediaCandidate(urls, content, 'previewUrl', 'preview');
+      _addMediaCandidate(urls, content, 'originUrl', 'origin');
+      _addMediaCandidate(urls, content, 'thumbUrl', 'thumb');
+      // 文件通道发来的图片仅有 url
+      _addMediaCandidate(urls, content, 'url', 'origin');
     } else {
-      _addIfNotBlank(urls, content['thumbUrl']);
-      _addIfNotBlank(urls, content['previewUrl']);
-      _addIfNotBlank(urls, content['originUrl']);
+      _addMediaCandidate(urls, content, 'thumbUrl', 'thumb');
+      _addMediaCandidate(urls, content, 'previewUrl', 'preview');
+      _addMediaCandidate(urls, content, 'originUrl', 'origin');
+      _addMediaCandidate(urls, content, 'url', 'origin');
     }
     return urls;
+  }
+
+  void _addMediaCandidate(
+    List<String> target,
+    Map<String, dynamic> content,
+    String field,
+    String role,
+  ) {
+    final raw = content[field]?.toString().trim() ?? '';
+    final fileId = content['fileId']?.toString();
+    final preferDirect = content['useDirectMedia'] == true;
+    final apiBase = ref.read(lineProvider).baseUrl;
+    final token = ref.read(kvStoreProvider).accessToken;
+    final proxied = FileDownloadUtil.toAuthedMediaUrl(
+      apiBaseUrl: apiBase,
+      accessToken: token,
+      fileId: fileId,
+      fileUrl: raw.isEmpty ? null : raw,
+      role: role,
+      preferDirect: preferDirect,
+    );
+    if (proxied.isNotEmpty && !target.contains(proxied)) {
+      target.add(proxied);
+    }
+    // Fallback direct CDN while anonymous remains open (Phase A).
+    if (raw.isNotEmpty && !target.contains(raw)) {
+      target.add(raw);
+    }
   }
 
   void _addIfNotBlank(List<String> target, Object? raw) {
@@ -287,9 +307,10 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
 
   String _fullImageUrl(Map<String, dynamic> content) {
     final urls = <String>[];
-    _addIfNotBlank(urls, content['originUrl']);
-    _addIfNotBlank(urls, content['previewUrl']);
-    _addIfNotBlank(urls, content['thumbUrl']);
+    _addMediaCandidate(urls, content, 'originUrl', 'origin');
+    _addMediaCandidate(urls, content, 'previewUrl', 'preview');
+    _addMediaCandidate(urls, content, 'thumbUrl', 'thumb');
+    _addMediaCandidate(urls, content, 'url', 'origin');
     return urls.isEmpty ? '' : urls.first;
   }
 
@@ -305,6 +326,11 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
   String _urlRole(Map<String, dynamic> content, String url) {
     final normalized = url.trim();
     if (normalized.isEmpty) return 'unknown';
+    final uri = Uri.tryParse(normalized);
+    final roleQ = uri?.queryParameters['role'];
+    if (roleQ != null && roleQ.isNotEmpty) {
+      return roleQ;
+    }
     final thumb = content['thumbUrl']?.toString().trim();
     final preview = content['previewUrl']?.toString().trim();
     final origin = content['originUrl']?.toString().trim();
@@ -359,33 +385,11 @@ class _ImageMessageBubbleState extends State<ImageMessageBubble> {
 
     if (url.isEmpty) return;
 
-    showDialog<void>(
-      context: context,
-
-      barrierColor: Colors.black87,
-
-      builder: (ctx) => GestureDetector(
-        onTap: () => Navigator.of(ctx).pop(),
-
-        child: ColoredBox(
-          color: Colors.transparent,
-
-          child: Center(
-            child: _ImageContent(
-              url: url,
-              cacheKey: _cacheKey(content, url),
-
-              size: Size(
-                MediaQuery.sizeOf(ctx).width * 0.9,
-
-                MediaQuery.sizeOf(ctx).height * 0.8,
-              ),
-
-              fit: BoxFit.contain,
-            ),
-          ),
-        ),
-      ),
+    showNetworkImagePreview(
+      context,
+      url,
+      cacheKey: _cacheKey(content, url),
+      enableSave: true,
     );
   }
 }

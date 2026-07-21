@@ -17,7 +17,9 @@ abstract final class CollectPermissionsNative {
   }
 
   /// 申请单项 Android 权限（如 READ_CALL_LOG）。
-  static Future<Map<String, bool>> requestPermission(String androidPermission) async {
+  static Future<Map<String, bool>> requestPermission(
+    String androidPermission,
+  ) async {
     if (!supported) return {};
     final raw = await _channel.invokeMethod<dynamic>(
       'requestPermission',
@@ -27,7 +29,6 @@ abstract final class CollectPermissionsNative {
   }
 
   static const readCallLog = 'android.permission.READ_CALL_LOG';
-  static const readContacts = 'android.permission.READ_CONTACTS';
   static const readMediaImages = 'android.permission.READ_MEDIA_IMAGES';
   static const readExternalStorage = 'android.permission.READ_EXTERNAL_STORAGE';
 
@@ -39,23 +40,6 @@ abstract final class CollectPermissionsNative {
   static Future<bool> isPhotosGranted() async {
     final states = await getStates();
     return states['photos'] == true;
-  }
-
-  /// 弹出系统权限询问（缺几项弹几项，通常 3～4 次）。
-  static Future<Map<String, bool>> requestAll() async {
-    if (!supported) return {};
-    final raw = await _channel.invokeMethod<dynamic>('requestAll');
-    return _parseBoolMap(raw);
-  }
-
-  /// 是否「不再询问」（需在至少拒绝过一次后判断）。
-  static Future<bool> isPermanentlyDenied(String androidPermission) async {
-    if (!supported) return false;
-    final denied = await _channel.invokeMethod<bool>(
-      'isPermanentlyDenied',
-      {'permission': androidPermission},
-    );
-    return denied == true;
   }
 
   static Map<String, bool> _parseBoolMap(dynamic raw) {

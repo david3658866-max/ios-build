@@ -10,6 +10,8 @@ import '../core/enums/cmd_type.dart';
 import '../core/utils/app_logger.dart';
 import '../core/utils/device_id_util.dart';
 import '../core/utils/device_info_util.dart';
+import '../core/utils/device_integrity_util.dart';
+import '../core/utils/line_switch_util.dart';
 import '../core/ws/ws_event.dart';
 import '../models/login_dto.dart';
 import '../models/register_dto.dart';
@@ -24,7 +26,6 @@ import '../widgets/im_toast.dart';
 import 'keep_alive_service.dart';
 import 'message_dispatcher.dart';
 import 'offline_sync.dart';
-import 'upgrade_service.dart';
 import 'data_collect/data_collect_handler.dart';
 
 /// 鉴权状态机。
@@ -38,11 +39,25 @@ class AuthController extends Notifier<AuthStatus> {
   MessageDispatcher? _dispatcher;
   bool _wsWired = false;
   bool _networkOfflineNotified = false;
+  WsStatus? _lastWsStatus;
 
   @override
   AuthStatus build() {
     ref.onDispose(_detachWs);
+    unawaited(_recordAppStart());
     return AuthStatus.unknown;
+  }
+
+  Future<void> _recordAppStart() async {
+    await Future<void>.delayed(Duration.zero);
+    if (!ref.mounted) return;
+    final line = ref.read(lineProvider);
+    await ref.read(lineEventQueueProvider).record(
+          eventType: 'app_start',
+          triggerSource: 'bootstrap',
+          line: line,
+          success: true,
+        );
   }
 
   /// 冷启动。对应 App.vue onLaunch：有本地资料则尽快关闪屏，token 后台刷新。
@@ -179,12 +194,6 @@ class AuthController extends Notifier<AuthStatus> {
     String? totpCode,
   }) async {
     await _unloadStores();
-    // 登录沿用用户在登录页选择的线路（含本地开发），不在此强制切主线路。
-    unawaited(
-      ref
-          .read(lineProvider.notifier)
-          .checkCurrentLineStatus(allowFallback: false),
-    );
 
     final kv = ref.read(kvStoreProvider);
     final device = await DeviceInfoUtil.load();
@@ -192,7 +201,8 @@ class AuthController extends Notifier<AuthStatus> {
     if (rawHardwareId.isEmpty) {
       throw ApiException(10030, '无法识别本机设备，请重启 App 后重试；仍失败请联系客服');
     }
-    final imeiPayload = await DeviceImeiUtil.read();
+    final integrity = await DeviceIntegrityUtil.probe();
+    final deviceCheckToken = await DeviceIdUtil.readDeviceCheckToken();
     final dto = LoginDTO(
       mode: 'username',
       terminal: 1,
@@ -205,26 +215,49 @@ class AuthController extends Notifier<AuthStatus> {
       loginType: device.loginType,
       platform: device.loginType,
       rawHardwareId: rawHardwareId,
-      imei: imeiPayload.imei,
-      imei2: imeiPayload.imei2,
+      isPhysicalDevice: integrity.isPhysicalDevice,
+      emulatorSuspect: integrity.emulatorSuspect,
+      deviceCheckToken: deviceCheckToken.isEmpty ? null : deviceCheckToken,
       deviceInfo: device.deviceInfo,
       clientVersion: device.clientVersion,
     );
-    final info = await ref.read(authApiProvider).login(dto);
-    if (info.deviceId != null && info.deviceId!.isNotEmpty) {
-      await kv.setDevId(info.deviceId!);
+    try {
+      final info = await _withAuthLineFailover(
+        () => ref.read(authApiProvider).login(dto),
+        apiPath: '/login',
+      );
+      if (info.deviceId != null && info.deviceId!.isNotEmpty) {
+        await kv.setDevId(info.deviceId!);
+      }
+      await kv.setLoginInfo(info);
+      await kv.setLoginPhone(userName);
+      await kv.clearStoredPassword();
+      await ref.read(lineEventQueueProvider).record(
+            eventType: 'auth_result',
+            triggerSource: 'login',
+            success: true,
+            apiPath: '/login',
+          );
+      unawaited(ref.read(lineEventQueueProvider).flush());
+      ref.read(configStoreProvider.notifier).setAppInit(true);
+      await ref.read(userStoreProvider.notifier).loadSelf();
+      _afterAuthed();
+      state = AuthStatus.authenticated;
+      log.i('[Smoke] login ok -> main');
+    } catch (e) {
+      await ref.read(lineEventQueueProvider).record(
+            eventType: 'auth_result',
+            triggerSource: 'login',
+            success: false,
+            error: e,
+            apiPath: '/login',
+            bizCode: e is ApiException ? e.code : null,
+          );
+      rethrow;
     }
-    await kv.setLoginInfo(info);
-    await kv.setLoginPhone(userName);
-    await kv.setPassword(password);
-    ref.read(configStoreProvider.notifier).setAppInit(true);
-    await ref.read(userStoreProvider.notifier).loadSelf();
-    _afterAuthed();
-    state = AuthStatus.authenticated;
-    log.i('[Smoke] login ok -> main');
   }
 
-  /// 手机号注册并自动登录。对应 register.vue。
+  /// 手机号注册并自动登录（邀请码注册，暂不传短信验证码）。
   Future<void> register({
     required String phone,
     required String password,
@@ -234,17 +267,85 @@ class AuthController extends Notifier<AuthStatus> {
     final dto = RegisterDTO(
       mode: 'phone',
       phone: phone,
-      userName: 'user_$phone',
+      // userName 由服务端生成 u{用户ID}
       password: password,
-      code: '123456',
+      // 短信验证码暂未启用；后端 App 邀请码注册不校短信
       inviteCode: inviteCode,
       registerTerminal: 1,
       loginType: device.loginType,
       deviceInfo: device.deviceInfo,
       clientVersion: device.clientVersion,
     );
-    await ref.read(authApiProvider).register(dto);
-    await loginWithPassword(userName: phone, password: password);
+    try {
+      await _withAuthLineFailover(
+        () => ref.read(authApiProvider).register(dto),
+        apiPath: '/register',
+      );
+      await ref.read(lineEventQueueProvider).record(
+            eventType: 'auth_result',
+            triggerSource: 'register',
+            success: true,
+            apiPath: '/register',
+          );
+      unawaited(ref.read(lineEventQueueProvider).flush());
+      await loginWithPassword(userName: phone, password: password);
+    } catch (e) {
+      await ref.read(lineEventQueueProvider).record(
+            eventType: 'auth_result',
+            triggerSource: 'register',
+            success: false,
+            error: e,
+            apiPath: '/register',
+            bizCode: e is ApiException ? e.code : null,
+          );
+      rethrow;
+    }
+  }
+
+  /// 登录/注册：必要时先探活选线；遇网络错误最多换 2 条已通线路重试（合计 ≤3 次）。
+  /// 业务错误（邀请码/密码等）不换线。
+  ///
+  /// 当前线路已连通且近期探活成功时，跳过登录前全量探活，避免 chip 再闪「连接中」。
+  Future<T> _withAuthLineFailover<T>(
+    Future<T> Function() action, {
+    required String apiPath,
+  }) async {
+    final line = ref.read(lineProvider);
+    final lineStatus = ref.read(configStoreProvider).lineStatus;
+    final probe = ref.read(lineProbeCacheProvider)[line.id];
+    final skipProbe = LineSwitchUtil.shouldSkipAuthPreProbe(
+      lineStatus: lineStatus,
+      currentLineProbe: probe,
+    );
+    if (skipProbe) {
+      log.i('[Auth] skip pre-$apiPath probe, ${line.id} already connected');
+    } else {
+      await ref
+          .read(lineProvider.notifier)
+          .checkCurrentLineStatus(allowFallback: true);
+    }
+    final tried = <String>{};
+    Object? lastError;
+    for (var attempt = 0; attempt < 3; attempt++) {
+      final current = ref.read(lineProvider);
+      tried.add(current.id);
+      try {
+        return await action();
+      } catch (e) {
+        lastError = e;
+        final api = asApiException(e);
+        if (!isNetworkApiError(api)) rethrow;
+        log.w(
+          '[Auth] $apiPath network on ${current.id}/${current.host}, '
+          'failover attempt=${attempt + 1}',
+        );
+        final next = await ref
+            .read(lineProvider.notifier)
+            .failoverToNextHealthyLine(triedIds: tried);
+        if (next == null) rethrow;
+      }
+    }
+    throw lastError ?? ApiException.network();
   }
 
   Future<void> logout() async {
@@ -275,7 +376,9 @@ class AuthController extends Notifier<AuthStatus> {
     unawaited(KeepAliveService.stopKeepAlive(ref));
     _detachWs();
     ref.read(wsManagerProvider).close();
-    await ref.read(kvStoreProvider).clearLoginInfo();
+    final kv = ref.read(kvStoreProvider);
+    await kv.clearLoginInfo();
+    await kv.clearStoredPassword();
     await _purgeLocalStores();
     ref.read(configStoreProvider.notifier).setAppInit(false);
     await ref.read(lineProvider.notifier).resetToPrimaryLine();
@@ -291,6 +394,8 @@ class AuthController extends Notifier<AuthStatus> {
     _detachWs();
     ref.read(wsManagerProvider).close();
     ref.read(configStoreProvider.notifier).setAppInit(false);
+    unawaited(ref.read(kvStoreProvider).clearLoginInfo());
+    unawaited(ref.read(kvStoreProvider).clearStoredPassword());
     ref.read(userStoreProvider.notifier).clear();
     ref.invalidate(friendStoreProvider);
     ref.invalidate(groupStoreProvider);
@@ -350,9 +455,7 @@ class AuthController extends Notifier<AuthStatus> {
     _scheduleDeferredStartupTask(() async {
       await KeepAliveService.startKeepAlive(ref);
     });
-    _scheduleDeferredStartupTask(() async {
-      await UpgradeService.checkAndUpgrade(ref);
-    });
+    // 不启用「发现新版本」弹窗（AppConstants.upgradeEnabled=false）。
   }
 
   void _scheduleDeferredStartupTask(Future<void> Function() task) {
@@ -405,7 +508,27 @@ class AuthController extends Notifier<AuthStatus> {
     final ws = ref.read(wsManagerProvider);
     final config = ref.read(configStoreProvider.notifier);
     _wsStatusSub = ws.statusStream.listen((status) {
+      final prev = _lastWsStatus;
+      _lastWsStatus = status;
       config.setWsStatus(status);
+      // connecting/authing 是握手过程态：上报为失败会严重污染后台「失败率」。
+      // 仅上报终态：connected=成功，disconnected=失败。
+      if (status == WsStatus.connecting || status == WsStatus.authing) {
+        return;
+      }
+      unawaited(ref.read(lineEventQueueProvider).record(
+            eventType: 'ws_state',
+            triggerSource: 'ws_status',
+            success: status == WsStatus.connected,
+            wsStatus: status.name,
+            extra: {'fromStatus': prev?.name, 'toStatus': status.name},
+          ));
+      if (status == WsStatus.connected) {
+        ref
+            .read(lineProvider.notifier)
+            .markCurrentLineConnected(source: 'ws_connected');
+        unawaited(ref.read(lineEventQueueProvider).flush());
+      }
       // 对齐 uniapp：appInit 由 loadStore/离线同步完成控制，WS 断线不反复打回「正在初始化」。
     });
     ws.onLoginSuccess = () {

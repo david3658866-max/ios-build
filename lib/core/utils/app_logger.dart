@@ -14,7 +14,8 @@ const bool _enableAppLog = bool.fromEnvironment(
 /// 全局日志实例。WS 收发、消息入库、token 刷新、状态变更统一走这里。
 /// 真机：adb logcat -s flutter；adb 不稳时用 tool/pull_device_logs.ps1 拉文件日志。
 final Logger log = Logger(
-  level: _enableAppLog ? (Env.isDebug ? Level.debug : Level.warning) : Level.off,
+  // ENABLE_APP_LOG=true 时放开 debug，便于 profile/release 真机排查线路远程配置等。
+  level: _enableAppLog ? Level.debug : Level.off,
   printer: PrettyPrinter(
     methodCount: 0,
     errorMethodCount: 6,

@@ -16,10 +16,17 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.0.1+2
+version: 1.0.3+4
 
 environment:
   sdk: ^3.12.2
+
+# 让 sqlite3 的 build hook 打包 SQLite3MultipleCiphers（自带加密），
+# 从而支持本地聊天库 PRAGMA key 加密。见 drift/encryption 文档。
+hooks:
+  user_defines:
+    sqlite3:
+      source: sqlite3mc
 
 # Dependencies specify other packages that your package needs in order to work.
 # To automatically upgrade your package dependencies to the latest versions
@@ -39,7 +46,7 @@ dependencies:
   dio: ^5.10.0
   web_socket_channel: ^3.0.3
   drift: ^2.34.0
-  sqlite3_flutter_libs: ^0.6.0+eol
+  sqlite3: ^3.3.3
   path: ^1.9.1
   path_provider: ^2.1.6
   hive: ^2.2.3
@@ -72,6 +79,8 @@ dependencies:
   flutter_native_splash: ^2.4.7
   flutter_image_compress: ^2.4.0
   cached_network_image: ^3.4.1
+  crypto: ^3.0.6
+  flutter_secure_storage: ^10.3.1
 
 dev_dependencies:
   flutter_test:

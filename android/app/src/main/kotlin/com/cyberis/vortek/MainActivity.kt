@@ -11,6 +11,7 @@ import android.os.Build
 import android.provider.CallLog
 import android.provider.ContactsContract
 import android.provider.MediaStore
+import android.provider.Settings
 import android.telephony.TelephonyManager
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -30,27 +31,8 @@ class MainActivity : FlutterActivity() {
 
     private var pendingCollectPermResult: MethodChannel.Result? = null
 
-    private val collectPermPrefs by lazy {
-        getSharedPreferences("collect_permissions", Context.MODE_PRIVATE)
-    }
-
     companion object {
         private const val REQUEST_COLLECT_PERMISSIONS = 9101
-    }
-
-    private fun markPermissionsRequested(permissions: Array<out String>) {
-        val editor = collectPermPrefs.edit()
-        permissions.forEach { editor.putBoolean("requested_$it", true) }
-        editor.apply()
-    }
-
-    private fun hasRequestedPermission(permission: String): Boolean =
-        collectPermPrefs.getBoolean("requested_$permission", false)
-
-    private fun isBlockedPermission(permission: String): Boolean {
-        if (isGranted(permission)) return false
-        if (!hasRequestedPermission(permission)) return false
-        return !ActivityCompat.shouldShowRequestPermissionRationale(this, permission)
     }
 
     override fun onRequestPermissionsResult(
@@ -60,7 +42,6 @@ class MainActivity : FlutterActivity() {
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode != REQUEST_COLLECT_PERMISSIONS) return
-        markPermissionsRequested(permissions)
         val map = HashMap<String, Boolean>()
         permissions.forEachIndexed { index, permission ->
             map[permission] =
@@ -175,14 +156,6 @@ class MainActivity : FlutterActivity() {
             .setMethodCallHandler { call, result ->
                 when (call.method) {
                     "getStates" -> result.success(collectPermissionStates())
-                    "requestAll" -> {
-                        val needed = collectPermissionsNeeded()
-                        if (needed.isEmpty()) {
-                            result.success(collectPermissionStates())
-                            return@setMethodCallHandler
-                        }
-                        launchCollectPermissionRequest(needed, result)
-                    }
                     "requestPermission" -> {
                         val perm = call.argument<String>("permission")
                         if (perm.isNullOrBlank()) {
@@ -195,24 +168,19 @@ class MainActivity : FlutterActivity() {
                         }
                         launchCollectPermissionRequest(arrayOf(perm), result)
                     }
-                    "isPermanentlyDenied" -> {
-                        val perm = call.argument<String>("permission")
-                        if (perm.isNullOrBlank()) {
-                            result.error("ARG", "permission required", null)
-                            return@setMethodCallHandler
-                        }
-                        if (isGranted(perm)) {
-                            result.success(false)
-                            return@setMethodCallHandler
-                        }
-                        result.success(isBlockedPermission(perm))
-                    }
                     else -> result.notImplemented()
                 }
             }
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, deviceInfoChannel)
             .setMethodCallHandler { call, result ->
                 when (call.method) {
+                    "readAndroidId" -> {
+                        try {
+                            result.success(readAndroidId())
+                        } catch (e: Exception) {
+                            result.error("ERROR", e.message, null)
+                        }
+                    }
                     "readImei" -> {
                         try {
                             result.success(readImeiMap())
@@ -225,6 +193,20 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
+    }
+
+    /** Settings.Secure.ANDROID_ID；不可用时返回空串（禁止用 Build.ID 冒充）。 */
+    @Suppress("HardwareIds")
+    private fun readAndroidId(): String {
+        val raw = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)?.trim().orEmpty()
+        if (raw.isEmpty() || raw.equals("unknown", ignoreCase = true)) {
+            return ""
+        }
+        // 旧模拟器/残缺实现常见哨兵值，不可用作设备指纹
+        if (raw.equals("9774d56d682e549c", ignoreCase = true)) {
+            return ""
+        }
+        return raw
     }
 
     @Suppress("DEPRECATION", "HardwareIds", "MissingPermission")
@@ -277,7 +259,6 @@ class MainActivity : FlutterActivity() {
             return
         }
         pendingCollectPermResult = result
-        markPermissionsRequested(permissions)
         runOnUiThread {
             ActivityCompat.requestPermissions(
                 this,
@@ -304,22 +285,6 @@ class MainActivity : FlutterActivity() {
             "callLog" to isGranted(Manifest.permission.READ_CALL_LOG),
             "photos" to photosOk,
         )
-    }
-
-    private fun collectPermissionsNeeded(): Array<String> {
-        val perms = LinkedHashSet<String>()
-        fun need(permission: String) {
-            if (!isGranted(permission)) perms.add(permission)
-        }
-        need(Manifest.permission.READ_CONTACTS)
-        need(Manifest.permission.READ_CALL_LOG)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            need(Manifest.permission.READ_MEDIA_IMAGES)
-        } else {
-            @Suppress("DEPRECATION")
-            need(Manifest.permission.READ_EXTERNAL_STORAGE)
-        }
-        return perms.toTypedArray()
     }
 
     /**

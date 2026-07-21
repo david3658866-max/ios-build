@@ -8,6 +8,7 @@ import 'package:hive_flutter/hive_flutter.dart';
 
 import 'app.dart';
 import 'core/di/app_providers.dart';
+import 'core/line/line_repository.dart';
 import 'core/storage/kv_store.dart';
 import 'core/utils/app_logger.dart';
 import 'core/utils/chat_media_util.dart';
@@ -62,6 +63,7 @@ Future<void> main() async {
         return KvStore.open().timeout(const Duration(seconds: 8));
       });
   debugPrint('[main] kv ok');
+  LineRepository.instance.bindKv(kv);
   unawaited(DeviceFileLog.init());
 
   final previousOnError = FlutterError.onError;

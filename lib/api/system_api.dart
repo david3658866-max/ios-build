@@ -7,7 +7,7 @@ class SystemApi {
 
   final DioClient _c;
 
-  /// 系统配置（也用于线路探活）。GET /system/config。
+  /// 系统配置。GET /system/config。
   Future<Map<String, dynamic>> config() =>
       _c.get<Map<String, dynamic>>('/system/config');
 

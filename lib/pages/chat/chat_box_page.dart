@@ -751,6 +751,22 @@ class _ChatBoxPageState extends ConsumerState<ChatBoxPage> {
 
   int _fileDownloadKey(Message msg) => msg.id ?? msg.rowId;
 
+  /// 文件消息实为图片（扩展名判断）。
+  bool _isImageFileMessage(Message msg) {
+    try {
+      final decoded = jsonDecode(msg.content ?? '');
+      if (decoded is! Map) return false;
+      final map = Map<String, dynamic>.from(decoded);
+      final name = map['name']?.toString() ?? '';
+      final url = map['url']?.toString() ?? '';
+      if (url.isEmpty) return false;
+      return ChatMediaUtil.isImageFileName(name) ||
+          ChatMediaUtil.isImageFileName(url);
+    } catch (_) {
+      return false;
+    }
+  }
+
   bool get _isAlive => mounted;
 
   String _messageIdentity(Message msg) =>
@@ -1625,6 +1641,12 @@ class _ChatBoxPageState extends ConsumerState<ChatBoxPage> {
     required String name,
     required int size,
   }) async {
+    // 文件通道选到图片时按图片发送，避免对方看到「文件卡片」
+    if (ChatMediaUtil.isImageFileName(name) ||
+        ChatMediaUtil.isImageFileName(path)) {
+      await _sendImageFromPath(path);
+      return;
+    }
     await _sendMedia(({bool receipt = false}) async {
       final store = ref.read(chatStoreProvider);
       if (widget.chatType == ChatType.private) {
@@ -2820,6 +2842,18 @@ class _ChatBoxPageState extends ConsumerState<ChatBoxPage> {
       );
     }
     if (msg.type == MessageType.file) {
+      if (_isImageFileMessage(msg)) {
+        return wrapMessageLongPress(
+          ImageMessageBubble(
+            message: msg,
+            selfSend: selfSend,
+            senderName: senderName,
+            senderRoles: senderRoles,
+            onResend: onResend,
+          ),
+          onLongPress,
+        );
+      }
       final dlKey = _fileDownloadKey(msg);
       return wrapMessageLongPress(
         FileMessageBubble(

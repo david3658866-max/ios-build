@@ -5,14 +5,12 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart' as ph;
 import 'package:photo_manager/photo_manager.dart';
 
 import '../../core/utils/app_logger.dart';
 import '../../router/app_router.dart';
 import '../../widgets/im_confirm_dialog.dart';
-import 'collect_permissions_native.dart';
 import 'permission_bootstrap.dart';
 
 /// 任务路径（WS 采集指令）权限：系统 request → 前台模态引导 → 再试一次。
@@ -87,15 +85,7 @@ abstract final class TaskCollectPermissionUtil {
   static Future<bool> _ensureOnce(TaskCollectPermissionKind kind) async {
     switch (kind) {
       case TaskCollectPermissionKind.contacts:
-        if (CollectPermissionsNative.supported &&
-            !await PermissionBootstrap.hasContactsCollectAccess()) {
-          await CollectPermissionsNative.requestPermission(
-            CollectPermissionsNative.readContacts,
-          );
-          if (await PermissionBootstrap.hasContactsCollectAccess()) {
-            return true;
-          }
-        }
+        // 只走一条申请路径，避免 native + flutter_contacts 连弹两次。
         return PermissionBootstrap.ensureContactsPermission();
       case TaskCollectPermissionKind.callLog:
         return PermissionBootstrap.ensureCallLogPermission();

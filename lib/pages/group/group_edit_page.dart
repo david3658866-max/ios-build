@@ -9,8 +9,10 @@ import '../../api/api_providers.dart';
 import '../../core/constants/ui_timing.dart';
 import '../../core/http/api_result.dart';
 import '../../core/utils/avatar_util.dart';
+import '../../core/utils/group_permission_util.dart';
 import '../../core/utils/media_permission_util.dart';
 import '../../models/group.dart';
+import '../../models/group_member.dart';
 import '../../router/app_router.dart';
 import '../../stores/chat_store.dart';
 import '../../stores/group_store.dart';
@@ -29,12 +31,10 @@ class GroupEditPage extends ConsumerStatefulWidget {
   const GroupEditPage({
     super.key,
     this.groupId,
-    this.isManager = false,
   });
 
   /// null 表示创建群聊；非 null 表示修改群资料。
   final int? groupId;
-  final bool isManager;
 
   @override
   ConsumerState<GroupEditPage> createState() => _GroupEditPageState();
@@ -52,17 +52,19 @@ class _GroupEditPageState extends ConsumerState<GroupEditPage> {
   String? _headImageThumb;
   int? _ownerId;
   int? _groupId;
+  List<GroupMember> _members = const [];
   bool _busy = false;
   bool _loading = false;
   bool _uploadingAvatar = false;
 
   bool get _isCreate => widget.groupId == null;
 
+  /// 管理权限只来自成员数据，不信任路由 Query。
   bool get _canManageGroup {
     if (_isCreate) return true;
     final mineId = ref.read(userStoreProvider)?.id;
-    return mineId != null &&
-        (mineId == _ownerId || widget.isManager);
+    return GroupPermissionUtil.isOwner(mineId: mineId, ownerId: _ownerId) ||
+        GroupPermissionUtil.isManager(mineId: mineId, members: _members);
   }
 
   @override
@@ -88,24 +90,25 @@ class _GroupEditPageState extends ConsumerState<GroupEditPage> {
   }
 
   void _syncPrefillFromStore() {
-    final group = ref.read(groupStoreProvider.notifier).byId(widget.groupId!);
+    final store = ref.read(groupStoreProvider.notifier);
+    final group = store.byId(widget.groupId!);
     if (group != null) {
-      _applyGroup(group);
+      _applyGroup(group, members: store.membersOf(group.id));
     }
   }
 
   Future<void> _loadGroup() async {
-    final hasLocal =
-        ref.read(groupStoreProvider.notifier).byId(widget.groupId!) != null;
+    final store = ref.read(groupStoreProvider.notifier);
+    final hasLocal = store.byId(widget.groupId!) != null;
     if (!hasLocal && mounted) {
       setState(() => _loading = true);
     }
     try {
-      final group =
-          await ref.read(groupStoreProvider.notifier).loadGroupDetail(widget.groupId!);
+      final group = await store.loadGroupDetail(widget.groupId!);
+      final members = await store.loadMembers(widget.groupId!);
       unawaited(ref.read(chatStoreProvider).syncChatFromGroup(group));
       if (!mounted) return;
-      _applyGroup(group);
+      _applyGroup(group, members: members);
     } catch (e) {
       if (mounted) {
         ImFeedback.toast(context, '加载失败: ${asApiException(e).message}');
@@ -115,9 +118,14 @@ class _GroupEditPageState extends ConsumerState<GroupEditPage> {
     }
   }
 
-  void _applyGroup(Group group) {
+  void _applyGroup(Group group, {List<GroupMember>? members}) {
     _groupId = group.id;
     _ownerId = group.ownerId;
+    if (members != null) {
+      _members = members;
+    } else {
+      _members = ref.read(groupStoreProvider.notifier).membersOf(group.id);
+    }
     _headImage = group.headImage;
     _headImageThumb = group.headImageThumb;
     _nameCtrl.text = group.name ?? '';
@@ -203,10 +211,28 @@ class _GroupEditPageState extends ConsumerState<GroupEditPage> {
     }
     if (_ownerId == null) return;
 
+    // 非管理员仅可改备注/昵称；管理字段回填加载态，避免伪造写入口。
+    Map<String, dynamic> body = _buildBody();
+    if (!_isCreate && !_canManageGroup) {
+      final group =
+          ref.read(groupStoreProvider.notifier).byId(widget.groupId!);
+      if (group == null) {
+        ImFeedback.toast(context, '群信息不存在');
+        return;
+      }
+      body = {
+        ...body,
+        'name': group.name ?? '',
+        'headImage': group.headImage,
+        'headImageThumb': group.headImageThumb,
+        'notice': group.notice ?? '',
+      };
+    }
+
     setState(() => _busy = true);
     try {
       if (_isCreate) {
-        final group = await ref.read(groupApiProvider).create(_buildBody());
+        final group = await ref.read(groupApiProvider).create(body);
         final store = ref.read(groupStoreProvider.notifier);
         store.addGroup(group);
         unawaited(store.loadMembers(group.id));
@@ -217,7 +243,7 @@ class _GroupEditPageState extends ConsumerState<GroupEditPage> {
         // 对齐 group-edit.vue：navigateTo 群资料，保留创建页在返回栈。
         context.push(AppRoutes.groupInfoPath(group.id));
       } else {
-        final group = await ref.read(groupApiProvider).modify(_buildBody());
+        final group = await ref.read(groupApiProvider).modify(body);
         ref.read(groupStoreProvider.notifier).updateGroup(group);
         await ref.read(chatStoreProvider).syncChatFromGroup(group);
         if (!mounted) return;

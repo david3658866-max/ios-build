@@ -22,6 +22,9 @@ class LoginDTO {
     this.rawHardwareId,
     this.imei,
     this.imei2,
+    this.isPhysicalDevice,
+    this.emulatorSuspect,
+    this.deviceCheckToken,
   });
 
   /// username / phone / email。
@@ -52,11 +55,20 @@ class LoginDTO {
   /// Android ANDROID_ID / iOS IDFV
   final String? rawHardwareId;
 
-  /// 主卡 IMEI（Android 尽力采集）
+  /// 已废弃：客户端不再采集 IMEI，保留字段仅为兼容旧包/历史数据。
   final String? imei;
 
-  /// 副卡 IMEI
+  /// 已废弃：客户端不再采集 IMEI2。
   final String? imei2;
+
+  /// 是否物理真机
+  final bool? isPhysicalDevice;
+
+  /// 疑似模拟器/云机
+  final bool? emulatorSuspect;
+
+  /// iOS DeviceCheck token（Base64），可空
+  final String? deviceCheckToken;
 
   factory LoginDTO.fromJson(Map<String, dynamic> json) =>
       _$LoginDTOFromJson(json);

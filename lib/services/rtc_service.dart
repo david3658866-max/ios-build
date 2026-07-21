@@ -1,11 +1,15 @@
 import 'dart:async';
+import 'dart:convert';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/enums/message_type.dart';
 import '../models/friend.dart';
 import '../models/group_message.dart';
 import '../models/private_message.dart';
+import '../router/app_router.dart';
 import '../stores/chat_store.dart';
+import '../stores/friend_store.dart';
 
 class RtcService {
   RtcService(this.ref);
@@ -70,38 +74,89 @@ class RtcService {
   Future<void> handlePrivateRtcSignal(
     PrivateMessage msg, {
     required int friendId,
-  }) async {}
+  }) async {
+    var delay = const Duration(milliseconds: 100);
+    if (msg.type == MessageType.rtcSetupVoice ||
+        msg.type == MessageType.rtcSetupVideo) {
+      if (!_privateRtcPageOpen) {
+        final friend = _loadFriend(friendId);
+        final mode =
+            msg.type == MessageType.rtcSetupVideo ? 'video' : 'voice';
+        openIncomingCall(mode: mode, friend: friend);
+        delay = const Duration(milliseconds: 500);
+      }
+    }
+    forwardPrivateSignal(msg.toJson(), delay: delay);
+  }
 
-  Future<void> handleGroupRtcSignal(GroupMessage msg) async {}
+  Future<void> handleGroupRtcSignal(GroupMessage msg) async {
+    var delay = const Duration(milliseconds: 100);
+    if (msg.type == MessageType.rtcGroupSetup) {
+      if (!_groupRtcPageOpen) {
+        openIncomingGroupCall(
+          groupId: msg.groupId,
+          inviterId: msg.sendId,
+          userInfosJson: msg.content ?? '[]',
+        );
+        delay = const Duration(milliseconds: 500);
+      }
+    }
+    forwardGroupSignal(msg.toJson(), delay: delay);
+  }
 
   void openOutgoingGroupCall({
     required int groupId,
     required int inviterId,
     required List<Map<String, dynamic>> userInfos,
-  }) {}
+  }) {
+    _pushGroupRtcPage(
+      groupId: groupId,
+      inviterId: inviterId,
+      isHost: true,
+      userInfos: userInfos,
+    );
+  }
 
   void openIncomingGroupCall({
     required int groupId,
     required int inviterId,
     required String userInfosJson,
-  }) {}
+  }) {
+    final userInfos = _parseUserInfos(userInfosJson);
+    _pushGroupRtcPage(
+      groupId: groupId,
+      inviterId: inviterId,
+      isHost: false,
+      userInfos: userInfos,
+    );
+  }
 
   void openJoinGroupCall({
     required int groupId,
     required int inviterId,
     required List<Map<String, dynamic>> userInfos,
-  }) {}
+  }) {
+    _pushGroupRtcPage(
+      groupId: groupId,
+      inviterId: inviterId,
+      isHost: false,
+      userInfos: userInfos,
+    );
+  }
 
   bool openOutgoingCall({
     required String mode,
     required Friend friend,
-  }) =>
-      false;
+  }) {
+    return _pushRtcPage(mode: mode, friend: friend, isHost: true);
+  }
 
   void openIncomingCall({
     required String mode,
     required Friend friend,
-  }) {}
+  }) {
+    _pushRtcPage(mode: mode, friend: friend, isHost: false);
+  }
 
   Future<void> insertPrivateActMessageFromWebView(dynamic data) async {
     final map = _parseActRtPayload(data);
@@ -145,6 +200,70 @@ class RtcService {
     return map;
   }
 
+  void _pushGroupRtcPage({
+    required int groupId,
+    required int inviterId,
+    required bool isHost,
+    required List<Map<String, dynamic>> userInfos,
+  }) {
+    if (_groupRtcPageOpen) return;
+    try {
+      ref.read(goRouterProvider).push(
+            AppRoutes.chatRtcGroupPath(
+              groupId: groupId,
+              inviterId: inviterId,
+              isHost: isHost,
+              userInfos: userInfos,
+            ),
+          );
+    } catch (e) {
+      
+    }
+  }
+
+  bool _pushRtcPage({
+    required String mode,
+    required Friend friend,
+    required bool isHost,
+  }) {
+    if (_privateRtcPageOpen) return false;
+    try {
+      ref.read(goRouterProvider).push(
+            AppRoutes.chatRtcPrivatePath(
+              mode: mode,
+              friend: friend,
+              isHost: isHost,
+            ),
+          );
+      return true;
+    } catch (e) {
+      
+      return false;
+    }
+  }
+
+  List<Map<String, dynamic>> _parseUserInfos(String raw) {
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! List) return const [];
+      return decoded
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  Friend _loadFriend(int id) {
+    final friend = ref.read(friendStoreProvider.notifier).byId(id);
+    return friend ??
+        Friend(
+          id: id,
+          showNickName: '鏈煡鐢ㄦ埛',
+          headImage: '',
+        );
+  }
 }
 
 final rtcServiceProvider = Provider<RtcService>((ref) {

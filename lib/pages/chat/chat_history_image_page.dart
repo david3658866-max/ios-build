@@ -14,6 +14,7 @@ import '../../router/app_router.dart';
 import '../../theme/im_colors.dart';
 import '../../theme/rpx.dart';
 import '../../widgets/chat/chat_message_menu.dart';
+import '../../widgets/image_preview_dialog.dart';
 import '../../widgets/im_nav_bar.dart';
 import '../../widgets/im_no_data_tip.dart';
 
@@ -79,36 +80,23 @@ class _ChatHistoryImagePageState extends ConsumerState<ChatHistoryImagePage> {
   }
 
   void _previewImage(Message msg) {
-    final url = _thumbUrl(msg);
+    final url = _fullImageUrl(msg) ?? _thumbUrl(msg);
     if (url == null || url.isEmpty) return;
-    if (NetworkImageFailCache.isTemporarilyBlocked(url)) return;
-    showDialog<void>(
-      context: context,
-      barrierColor: Colors.black87,
-      builder: (ctx) => GestureDetector(
-        onTap: () => Navigator.pop(ctx),
-        child: InteractiveViewer(
-          child: Image.network(
-            url,
-            fit: BoxFit.contain,
-            frameBuilder: (context, child, frame, syncLoaded) {
-              if (syncLoaded || frame != null) {
-                NetworkImageFailCache.markSucceeded(url);
-              }
-              return child;
-            },
-            errorBuilder: (_, _, _) {
-              NetworkImageFailCache.markFailed(url);
-              return Icon(
-                Icons.broken_image_outlined,
-                color: Colors.white54,
-                size: rpx(context, 72),
-              );
-            },
-          ),
-        ),
-      ),
-    );
+    showNetworkImagePreview(context, url, enableSave: true);
+  }
+
+  String? _fullImageUrl(Message msg) {
+    try {
+      final map = jsonDecode(msg.content ?? '{}');
+      if (map is! Map) return null;
+      final origin = map['originUrl']?.toString().trim();
+      if (origin != null && origin.isNotEmpty) return origin;
+      final preview = map['previewUrl']?.toString().trim();
+      if (preview != null && preview.isNotEmpty) return preview;
+      return map['thumbUrl']?.toString().trim();
+    } catch (_) {
+      return null;
+    }
   }
 
   Future<void> _onLongPress(Message msg, Offset anchor) async {

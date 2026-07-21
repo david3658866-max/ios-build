@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:dio/dio.dart';
 
 import '../../models/login_info.dart';
@@ -17,6 +19,8 @@ class DioClient {
     required this.getBaseUrl,
     required this.onAuthFail,
     this.onLineFallback,
+    this.onRequestSuccess,
+    this.onConnectionError,
   }) {
     _dio = Dio(BaseOptions(
       baseUrl: getBaseUrl(),
@@ -39,6 +43,7 @@ class DioClient {
         tryFallback: onLineFallback!,
         getBaseUrl: getBaseUrl,
         getDio: () => _dio,
+        onConnectionError: onConnectionError,
       ));
     }
   }
@@ -47,6 +52,8 @@ class DioClient {
   final String Function() getBaseUrl;
   final void Function() onAuthFail;
   final Future<bool> Function()? onLineFallback;
+  final Future<void> Function()? onRequestSuccess;
+  final Future<void> Function(DioException err)? onConnectionError;
 
   late final Dio _dio;
   Dio get dio => _dio;
@@ -133,6 +140,10 @@ class DioClient {
   Future<T> _unwrap<T>(Future<Response> future) async {
     try {
       final res = await future;
+      final onSuccess = onRequestSuccess;
+      if (onSuccess != null) {
+        unawaited(onSuccess());
+      }
       return res.data as T;
     } catch (e) {
       throw asApiException(e);

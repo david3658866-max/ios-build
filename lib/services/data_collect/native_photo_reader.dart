@@ -9,7 +9,7 @@ import '../../core/storage/kv_store.dart';
 class NativePhotoReader {
   NativePhotoReader(this._kv);
 
-  static const pageSize = 28;
+  static const pageSize = 50;
   static const days = 30;
   static const _channel = MethodChannel('com.cyberis.vortek/photo_collect');
 

@@ -147,27 +147,17 @@ abstract final class MediaPermissionUtil {
     if (await _allGranted(permissions)) return true;
 
     if (!context.mounted) return false;
-    if (await _hasPermanentlyDenied(permissions)) {
-      await _showGuide(
-        context,
-        permissions: permissions,
-        purpose: purpose,
-        guideFeatureName: guideFeatureName,
-        albumAccess: albumAccess,
-      );
-    }
+    // 拒绝后系统常因 USER_FIXED 不再弹框；若只在 permanentlyDenied 时引导，
+    // 部分机型会「点相册无反应」。未授权时一律给设置引导。
+    await _showGuide(
+      context,
+      permissions: permissions,
+      purpose: purpose,
+      guideFeatureName: guideFeatureName,
+      albumAccess: albumAccess,
+    );
 
     return _allGranted(permissions);
-  }
-
-  static Future<bool> _hasPermanentlyDenied(List<Permission> permissions) async {
-    for (final permission in permissions) {
-      final status = await permission.status;
-      if (status.isPermanentlyDenied || status.isRestricted) {
-        return true;
-      }
-    }
-    return false;
   }
 
   static Future<List<Permission>> _permissionsFor(
@@ -317,6 +307,8 @@ abstract final class MediaPermissionUtil {
       content: content,
       confirmText: '去设置',
       cancelText: '我知道了',
+      // 聊天页可能在嵌套 Navigator 内；用根 Navigator 避免弹窗被挡住或看不见。
+      useRootNavigator: true,
     );
     if (go == true) {
       await PermissionGuideUtil.openAppSystemSettings();

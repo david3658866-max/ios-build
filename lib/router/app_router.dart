@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -10,6 +12,9 @@ import '../pages/chat/chat_history_file_page.dart';
 import '../pages/chat/chat_system_page.dart';
 import '../pages/chat/chat_system_content_page.dart';
 import '../pages/chat/chat_video_page.dart';
+import '../models/friend.dart';
+import '../pages/chat/rtc_private_page.dart';
+import '../pages/chat/rtc_group_page.dart';
 import '../pages/common/external_link_page.dart';
 import '../pages/scan/scan_page.dart';
 import '../pages/login/login_page.dart';
@@ -87,8 +92,7 @@ abstract final class AppRoutes {
   static const String groupManager = '/group/manager/:groupId';
 
   static String groupInfoPath(int groupId) => '/group/info/$groupId';
-  static String groupEditPath(int groupId, {bool isManager = false}) =>
-      '/group/edit/$groupId${isManager ? '?isManager=true' : ''}';
+  static String groupEditPath(int groupId) => '/group/edit/$groupId';
   static String groupMemberPath(int groupId) => '/group/member/$groupId';
   static String groupInvitePath(int groupId) => '/group/invite/$groupId';
   static String groupQrcodePath(int groupId, {required bool isAllowInvite}) =>
@@ -134,6 +138,40 @@ abstract final class AppRoutes {
   }
 
   static const String chatVideo = '/chat/video';
+
+  /// 私聊音视频通话页。
+  static const String chatRtcPrivate = '/chat/rtc/private';
+
+  static String chatRtcPrivatePath({
+    required String mode,
+    required Friend friend,
+    required bool isHost,
+  }) {
+    final q = Uri(queryParameters: {
+      'mode': mode,
+      'isHost': isHost.toString(),
+      'friend': Uri.encodeComponent(jsonEncode(friend.toJson())),
+    });
+    return '${AppRoutes.chatRtcPrivate}?${q.query}';
+  }
+
+  /// 群聊音视频通话页。
+  static const String chatRtcGroup = '/chat/rtc/group';
+
+  static String chatRtcGroupPath({
+    required int groupId,
+    required int inviterId,
+    required bool isHost,
+    required List<Map<String, dynamic>> userInfos,
+  }) {
+    final q = Uri(queryParameters: {
+      'groupId': groupId.toString(),
+      'inviterId': inviterId.toString(),
+      'isHost': isHost.toString(),
+      'userInfos': Uri.encodeComponent(jsonEncode(userInfos)),
+    });
+    return '${AppRoutes.chatRtcGroup}?${q.query}';
+  }
 
   static String chatVideoPath(String url, {String? poster}) {
     final q = Uri(queryParameters: {
@@ -312,7 +350,6 @@ final goRouterProvider = Provider<GoRouter>((ref) {
         path: AppRoutes.groupEdit,
         builder: (context, state) => GroupEditPage(
           groupId: int.tryParse(state.pathParameters['groupId'] ?? ''),
-          isManager: state.uri.queryParameters['isManager'] == 'true',
         ),
       ),
       GoRoute(
@@ -413,6 +450,57 @@ final goRouterProvider = Provider<GoRouter>((ref) {
           url: state.uri.queryParameters['url'] ?? '',
           poster: state.uri.queryParameters['poster'],
         ),
+      ),
+      GoRoute(
+        path: AppRoutes.chatRtcPrivate,
+        builder: (context, state) {
+          final mode = state.uri.queryParameters['mode'] ?? 'video';
+          final isHost = state.uri.queryParameters['isHost'] == 'true';
+          Friend friend = Friend(id: 0, showNickName: '未知用户');
+          final rawFriend = state.uri.queryParameters['friend'];
+          if (rawFriend != null && rawFriend.isNotEmpty) {
+            try {
+              final decoded = jsonDecode(Uri.decodeComponent(rawFriend));
+              if (decoded is Map<String, dynamic>) {
+                friend = Friend.fromJson(decoded);
+              }
+            } catch (_) {}
+          }
+          return RtcPrivatePage(
+            mode: mode,
+            isHost: isHost,
+            friend: friend,
+          );
+        },
+      ),
+      GoRoute(
+        path: AppRoutes.chatRtcGroup,
+        builder: (context, state) {
+          final groupId =
+              int.tryParse(state.uri.queryParameters['groupId'] ?? '') ?? 0;
+          final inviterId =
+              int.tryParse(state.uri.queryParameters['inviterId'] ?? '') ?? 0;
+          final isHost = state.uri.queryParameters['isHost'] == 'true';
+          var userInfos = <Map<String, dynamic>>[];
+          final rawUsers = state.uri.queryParameters['userInfos'];
+          if (rawUsers != null && rawUsers.isNotEmpty) {
+            try {
+              final decoded = jsonDecode(Uri.decodeComponent(rawUsers));
+              if (decoded is List) {
+                userInfos = decoded
+                    .whereType<Map>()
+                    .map((e) => Map<String, dynamic>.from(e))
+                    .toList();
+              }
+            } catch (_) {}
+          }
+          return RtcGroupPage(
+            groupId: groupId,
+            inviterId: inviterId,
+            isHost: isHost,
+            userInfos: userInfos,
+          );
+        },
       ),
       GoRoute(
         path: AppRoutes.groupInfo,

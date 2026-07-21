@@ -1,12 +1,11 @@
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 
 import '../../core/config/app_constants.dart';
 import '../../core/di/app_providers.dart';
+import '../../core/storage/teenager_pin_store.dart';
+import '../../core/utils/teenager_mode_util.dart';
 import '../../stores/user_store.dart';
 import '../../theme/im_colors.dart';
 import '../../theme/rpx.dart';
@@ -15,7 +14,7 @@ import '../../widgets/im_nav_bar.dart';
 import '../../widgets/im_primary_button.dart';
 import '../../widgets/im_feedback.dart';
 
-/// 青少年模式。对齐 mine-teenager.vue（本地 KV 存储）。
+/// 青少年模式。PIN 哈希存安全存储；Hive 仅保留 enabled。
 class TeenagerPage extends ConsumerStatefulWidget {
   const TeenagerPage({super.key});
 
@@ -24,16 +23,13 @@ class TeenagerPage extends ConsumerStatefulWidget {
 }
 
 class _TeenagerPageState extends ConsumerState<TeenagerPage> {
+  final _pinStore = TeenagerPinStore();
   int _step = 1;
   bool _enabled = false;
-  String _password = '';
+  String _pendingPin = '';
   int _pinNonce = 0;
 
-  String? get _storageKey {
-    final userId = ref.read(userStoreProvider)?.id;
-    if (userId == null) return null;
-    return 'chats-app-$userId-teenagerMode';
-  }
+  int? get _userId => ref.read(userStoreProvider)?.id;
 
   @override
   void initState() {
@@ -41,78 +37,80 @@ class _TeenagerPageState extends ConsumerState<TeenagerPage> {
     WidgetsBinding.instance.addPostFrameCallback((_) => _loadFromStorage());
   }
 
-  void _loadFromStorage() {
-    final key = _storageKey;
-    if (key == null) return;
-    final raw = ref.read(kvStoreProvider).get<String>(key);
-    if (raw == null || raw.isEmpty) return;
-    try {
-      final data = jsonDecode(raw) as Map<String, dynamic>;
-      setState(() {
-        _enabled = data['enabled'] == true;
-        _password = data['password'] as String? ?? '';
-      });
-    } catch (_) {}
-  }
-
-  Future<void> _saveMode({required bool enabled, required String password}) async {
-    final key = _storageKey;
-    if (key == null) return;
-    await ref.read(kvStoreProvider).set(
-          key,
-          jsonEncode({'enabled': enabled, 'password': password}),
-        );
-  }
-
-  Future<void> _removeMode() async {
-    final key = _storageKey;
-    if (key == null) return;
-    await ref.read(kvStoreProvider).remove(key);
+  Future<void> _loadFromStorage() async {
+    final userId = _userId;
+    if (userId == null) return;
+    final kv = ref.read(kvStoreProvider);
+    await TeenagerModeUtil.migrateLegacyPinIfNeeded(
+      userId: userId,
+      kv: kv,
+      pinStore: _pinStore,
+    );
+    if (!mounted) return;
+    setState(() {
+      _enabled = TeenagerModeUtil.isEnabled(userId: userId, kv: kv);
+    });
   }
 
   void _snack(String msg) => ImFeedback.toast(context, msg);
 
   void _onPasswordComplete(String code) {
     setState(() {
-      _password = code;
+      _pendingPin = code;
       _step = 3;
     });
   }
 
   Future<void> _onPasswordConfirm(String code) async {
-    if (_password == code) {
-      await _saveMode(enabled: true, password: _password);
-      if (!mounted) return;
-      setState(() {
-        _enabled = true;
-        _step = 1;
-      });
-    } else {
+    final userId = _userId;
+    if (userId == null) return;
+    if (_pendingPin != code) {
       _snack('密码不一致,请重新设置');
       setState(() {
         _step = 3;
         _pinNonce++;
       });
+      return;
     }
+    final kv = ref.read(kvStoreProvider);
+    await _pinStore.savePin(userId, _pendingPin);
+    await TeenagerModeUtil.setEnabledFlag(
+      userId: userId,
+      kv: kv,
+      enabled: true,
+    );
+    if (!mounted) return;
+    setState(() {
+      _enabled = true;
+      _pendingPin = '';
+      _step = 1;
+    });
   }
 
   Future<void> _onPasswordVerify(String code) async {
-    if (_password == code) {
-      await _removeMode();
-      if (!mounted) return;
-      setState(() {
-        _enabled = false;
-        _password = '';
-        _step = 1;
-      });
-      _snack('青少年模式已关闭');
-    } else {
+    final userId = _userId;
+    if (userId == null) return;
+    final ok = await _pinStore.verifyPin(userId, code);
+    if (!ok) {
       _snack('密码错误，请重新输入');
       setState(() {
         _step = 4;
         _pinNonce++;
       });
+      return;
     }
+    await TeenagerModeUtil.clearMode(
+      userId: userId,
+      kv: ref.read(kvStoreProvider),
+      pinStore: _pinStore,
+    );
+    if (!mounted) return;
+    setState(() {
+      _enabled = false;
+      _pendingPin = '';
+      _step = 1;
+    });
+    _snack('青少年模式已关闭');
   }
 
   Future<void> _onCloseTeenagerMode() async {

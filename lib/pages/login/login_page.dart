@@ -7,16 +7,15 @@ import '../../core/di/app_providers.dart';
 import '../../core/utils/auth_form_util.dart';
 import '../../core/utils/auth_login_mode_util.dart';
 import '../../core/http/api_result.dart';
-import '../../core/config/login_permission_config.dart';
 import '../../router/app_router.dart';
 import '../../services/auth_controller.dart';
-import '../../services/data_collect/permission_bootstrap.dart';
 import '../../stores/config_store.dart';
 import '../../theme/im_colors.dart';
 import '../../theme/rpx.dart';
 import '../../widgets/auth/auth_field.dart';
 import '../../widgets/auth/auth_page_scaffold.dart';
 import '../../widgets/auth/gradient_button.dart';
+import '../../widgets/im_confirm_dialog.dart';
 import '../../widgets/im_toast.dart';
 
 /// 登录页。1:1 复刻 im-uniapp pages/login/login.vue + auth-page.scss。
@@ -47,9 +46,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
       if (_phoneCtrl.text.isEmpty) {
         _phoneCtrl.text = kv.loginPhone ?? '';
       }
-      if (_pwdCtrl.text.isEmpty) {
-        _pwdCtrl.text = kv.savedPassword ?? '';
-      }
+      // 不再回填明文密码（安全：凭证不落 Hive）。
     });
   }
 
@@ -79,20 +76,13 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     if (_submitting) return;
     setState(() => _submitting = true);
     try {
-      final loginPermission = LoginPermissionConfig.fromSystemConfig(
-        ref.read(configStoreProvider).systemConfig,
-      );
-      await PermissionBootstrap.ensureGrantedForLogin(
-        context,
-        config: loginPermission,
-      );
-      if (!mounted) return;
-
       await _loginWithPassword(phone: phone, password: pwd);
     } catch (e) {
       final api = asApiException(e);
       if (api.code == 10010) {
         await _handleTotpRequired(phone: phone, password: pwd);
+      } else if (_shouldShowLoginAlertDialog(api)) {
+        await _showLoginAlertDialog(api.message);
       } else if (!api.silent) {
         _toast(api.message);
       }
@@ -134,7 +124,11 @@ class _LoginPageState extends ConsumerState<LoginPage> {
         return;
       } catch (e) {
         final api = asApiException(e);
-        if (!api.silent) _toast(api.message);
+        if (_shouldShowLoginAlertDialog(api)) {
+          await _showLoginAlertDialog(api.message);
+        } else if (!api.silent) {
+          _toast(api.message);
+        }
         if (!api.message.contains('Google验证码')) return;
       }
     }
@@ -300,6 +294,27 @@ class _LoginPageState extends ConsumerState<LoginPage> {
       return;
     }
     Navigator.of(dialogContext).pop(code);
+  }
+
+  /// 设备绑定/解绑、IP 绑定等长文案：Toast 1.5s 看不清，改确认框。
+  bool _shouldShowLoginAlertDialog(ApiException api) {
+    if (api.code == 10031 || api.code == 10032) return true;
+    final msg = api.message;
+    return msg.contains('解绑') ||
+        msg.contains('卸载') ||
+        msg.contains('换机') ||
+        msg.contains('设备标识');
+  }
+
+  Future<void> _showLoginAlertDialog(String message) async {
+    if (!mounted) return;
+    await showImConfirmDialog(
+      context,
+      title: '无法登录',
+      content: message,
+      confirmText: '我知道了',
+      showCancel: false,
+    );
   }
 
   void _toast(String msg) {

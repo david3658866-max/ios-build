@@ -1,0 +1,2 @@
+﻿ 7158ms fail=False sec= conn=False healthy=True chip=[已切换至备用线路3]
+10338ms fail=False sec= conn=False healthy=True chip=[消息 备用线路3 备用线路3]

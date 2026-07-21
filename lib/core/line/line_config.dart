@@ -1,10 +1,4 @@
-/// 内置线路：Release 走生产 bgznp（4 条）；Debug 额外显示「本地调试」。
-///
-/// 构建：`--dart-define=APP_ENV=test` 时使用 de010 测试线路（仅联调/H5 测试包）。
-/// 默认 `APP_ENV=prod`（正式 Release）。
-///
-/// 切换时 IM API + WebSocket + 扫码地址整组切换。
-/// 取值与 im-uniapp `common/line-config.js` 一致（本期 Flutter 未单独配置 baseBizUrl）。
+// Built-in APP lines (bootstrap). Runtime list may be overridden via [LineRepository].
 import 'package:flutter/foundation.dart';
 
 class LineConfig {
@@ -22,27 +16,41 @@ class LineConfig {
   final String name;
   final String label;
   final String host;
-
-  /// IM REST API 前缀，例如 `https://zenty.bgznp.com/api`。
   final String baseUrl;
-
-  /// WebSocket 地址，例如 `wss://zenty.bgznp.com/im`。
   final String wsUrl;
-
-  /// 扫码跳转地址。
   final String scanUrl;
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'name': name,
+        'label': label,
+        'host': host,
+        'baseUrl': baseUrl,
+        'wsUrl': wsUrl,
+        'scanUrl': scanUrl,
+      };
+
+  factory LineConfig.fromJson(Map<String, dynamic> json) {
+    return LineConfig(
+      id: (json['id'] ?? json['lineKey'] ?? '').toString(),
+      name: (json['name'] ?? '').toString(),
+      label: (json['label'] ?? '').toString(),
+      host: (json['host'] ?? '').toString(),
+      baseUrl: (json['baseUrl'] ?? '').toString(),
+      wsUrl: (json['wsUrl'] ?? '').toString(),
+      scanUrl: (json['scanUrl'] ?? '').toString(),
+    );
+  }
 }
 
-/// Hive 中保存当前线路 id 的 key。
 const String kLineStorageKey = 'app_line_id';
 
-const _appEnv = String.fromEnvironment('APP_ENV', defaultValue: 'prod');
+const kAppEnv = String.fromEnvironment('APP_ENV', defaultValue: 'prod');
+const kLineConfigVersion = '2026-07-12-bgznp-v1';
 
-/// 生产 H5 扫码域（与 im-uniapp line-config 一致）。
 const _prodH5Scan = 'https://kavun.bgznp.com';
 
-/// 生产 bgznp：1 主 + 3 备。
-const List<LineConfig> _prodRemoteLines = [
+const List<LineConfig> kBuiltinProdLines = [
   LineConfig(
     id: 'line1',
     name: '主线路',
@@ -56,9 +64,9 @@ const List<LineConfig> _prodRemoteLines = [
     id: 'line2',
     name: '备用线路1',
     label: 'bgznp 备用通道1',
-    host: 'drako.bgznp.com',
-    baseUrl: 'https://drako.bgznp.com/api',
-    wsUrl: 'wss://drako.bgznp.com/im',
+    host: 'castle.bgznp.com',
+    baseUrl: 'https://castle.bgznp.com/api',
+    wsUrl: 'wss://castle.bgznp.com/im',
     scanUrl: _prodH5Scan,
   ),
   LineConfig(
@@ -70,19 +78,19 @@ const List<LineConfig> _prodRemoteLines = [
     wsUrl: 'wss://muvin.bgznp.com/im',
     scanUrl: _prodH5Scan,
   ),
+  // App 备用3 = nuvor（config.prod.local backup3）；jovik 仅 Web 用户端。
   LineConfig(
     id: 'line4',
     name: '备用线路3',
     label: 'bgznp 备用通道3',
-    host: 'jovik.bgznp.com',
-    baseUrl: 'https://jovik.bgznp.com/api',
-    wsUrl: 'wss://jovik.bgznp.com/im',
+    host: 'nuvor.bgznp.com',
+    baseUrl: 'https://nuvor.bgznp.com/api',
+    wsUrl: 'wss://nuvor.bgznp.com/im',
     scanUrl: _prodH5Scan,
   ),
 ];
 
-/// 测试 de010：1 主 + 3 备（`APP_ENV=test`）。
-const List<LineConfig> _testRemoteLines = [
+const List<LineConfig> kBuiltinTestLines = [
   LineConfig(
     id: 'line1',
     name: '主线路',
@@ -121,11 +129,9 @@ const List<LineConfig> _testRemoteLines = [
   ),
 ];
 
-/// 当前构建环境的线上线路。
-List<LineConfig> get kProductionLines =>
-    _appEnv == 'test' ? _testRemoteLines : _prodRemoteLines;
+List<LineConfig> get kBuiltinProductionLines =>
+    kAppEnv == 'test' ? kBuiltinTestLines : kBuiltinProdLines;
 
-/// 本机调试（仅 Debug 包出现在线路列表）。
 const LineConfig kLocalDevLine = LineConfig(
   id: 'line_local',
   name: '本地调试',
@@ -136,17 +142,14 @@ const LineConfig kLocalDevLine = LineConfig(
   scanUrl: 'http://127.0.0.1:8080',
 );
 
-/// 构建时注入的局域网 IP（build-apk.ps1 自动检测），adb reverse 失效时可直连电脑。
 const String kLocalDevLanHost =
     String.fromEnvironment('LOCAL_DEV_HOST', defaultValue: '');
 
-/// 本地开发探活顺序：USB adb reverse → 局域网 IP。
 List<String> get kLocalDevProbeHosts {
   if (kLocalDevLanHost.isEmpty) return const ['127.0.0.1'];
   return ['127.0.0.1', kLocalDevLanHost];
 }
 
-/// 按 host 生成本地开发线路（Debug 包默认 127.0.0.1）。
 LineConfig localDevLineForHost(String host) => LineConfig(
       id: 'line_local',
       name: '本地调试',
@@ -157,21 +160,51 @@ LineConfig localDevLineForHost(String host) => LineConfig(
       scanUrl: 'http://$host:8080',
     );
 
-/// 与历史代码兼容：线上线路常量名保留为 kLines。
+/// Compatibility: runtime overrides via [bindLineRuntime] (LineRepository).
+List<LineConfig> Function()? _productionLinesOverride;
+List<LineConfig> Function()? _visibleLinesOverride;
+LineConfig Function(String?)? _byIdOverride;
+LineConfig Function()? _defaultLineOverride;
+String Function()? _configVersionOverride;
+
+void bindLineRuntime({
+  required List<LineConfig> Function() productionLines,
+  required List<LineConfig> Function() visibleLines,
+  required LineConfig Function(String?) byId,
+  required LineConfig Function() defaultLine,
+  required String Function() configVersion,
+}) {
+  _productionLinesOverride = productionLines;
+  _visibleLinesOverride = visibleLines;
+  _byIdOverride = byId;
+  _defaultLineOverride = defaultLine;
+  _configVersionOverride = configVersion;
+}
+
+String get effectiveLineConfigVersion =>
+    _configVersionOverride?.call() ?? kLineConfigVersion;
+
+/// Runtime production lines (remote cache or builtin).
+List<LineConfig> get kProductionLines =>
+    _productionLinesOverride?.call() ?? kBuiltinProductionLines;
+
 List<LineConfig> get kLines => kProductionLines;
 
-/// 线路面板展示列表。
 List<LineConfig> get kVisibleLines =>
-    kDebugMode ? [kLocalDevLine, ...kProductionLines] : kProductionLines;
+    _visibleLinesOverride?.call() ??
+    (kDebugMode ? [kLocalDevLine, ...kBuiltinProductionLines] : kBuiltinProductionLines);
 
-/// 默认线路：Debug 本机，Release 主线路。
-LineConfig get kDefaultLine => kDebugMode ? kLocalDevLine : kProductionLines.first;
+LineConfig get kDefaultLine =>
+    _defaultLineOverride?.call() ??
+    (kDebugMode ? kLocalDevLine : kBuiltinProductionLines.first);
 
-/// 按 id 查找线路；兼容历史 line5。
 LineConfig lineById(String? id) {
+  final override = _byIdOverride;
+  if (override != null) return override(id);
   if (id == null) return kDefaultLine;
-  if (id == 'line5') return kDebugMode ? kLocalDevLine : kProductionLines.first;
-  if (id == 'line_local' && !kDebugMode) return kProductionLines.first;
+  if (id == 'line_local' && !kDebugMode) {
+    return kBuiltinProductionLines.first;
+  }
   for (final line in kVisibleLines) {
     if (line.id == id) return line;
   }
