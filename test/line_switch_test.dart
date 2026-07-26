@@ -70,14 +70,98 @@ void main() {
       );
     });
 
-    test('chipStatus 对齐 uniapp：始终看 lineStatus', () {
+    test('chipStatus 已登录且探活通则跟真实 WS', () {
       expect(
         LineSwitchUtil.chipStatus(
           isAuthenticated: true,
           lineStatus: WsStatus.connected,
           wsStatus: WsStatus.disconnected,
         ),
+        WsStatus.disconnected,
+      );
+      expect(
+        LineSwitchUtil.chipStatus(
+          isAuthenticated: true,
+          lineStatus: WsStatus.connected,
+          wsStatus: WsStatus.connected,
+        ),
         WsStatus.connected,
+      );
+      expect(
+        LineSwitchUtil.chipStatus(
+          isAuthenticated: true,
+          lineStatus: WsStatus.disconnected,
+          wsStatus: WsStatus.connected,
+        ),
+        WsStatus.disconnected,
+      );
+    });
+
+    test('isMessageChannelDegraded 仅已登录+HTTP通+WS断', () {
+      expect(
+        LineSwitchUtil.isMessageChannelDegraded(
+          isAuthenticated: true,
+          lineStatus: WsStatus.connected,
+          wsStatus: WsStatus.disconnected,
+        ),
+        isTrue,
+      );
+      expect(
+        LineSwitchUtil.isMessageChannelDegraded(
+          isAuthenticated: false,
+          lineStatus: WsStatus.connected,
+          wsStatus: WsStatus.disconnected,
+        ),
+        isFalse,
+      );
+      expect(
+        LineSwitchUtil.isMessageChannelDegraded(
+          isAuthenticated: true,
+          lineStatus: WsStatus.disconnected,
+          wsStatus: WsStatus.disconnected,
+        ),
+        isFalse,
+      );
+      expect(LineSwitchUtil.messageChannelDegradedLabel, '消息异常');
+    });
+
+    test('shouldTriggerWsDisconnectFailover 连续 2 次且未冷却', () {
+      final now = DateTime.fromMillisecondsSinceEpoch(1_000_000);
+      expect(
+        LineSwitchUtil.shouldTriggerWsDisconnectFailover(
+          consecutiveDisconnectsWithoutConnect: 1,
+          deviceOffline: false,
+          cooldownUntil: null,
+          now: now,
+        ),
+        isFalse,
+      );
+      expect(
+        LineSwitchUtil.shouldTriggerWsDisconnectFailover(
+          consecutiveDisconnectsWithoutConnect: 2,
+          deviceOffline: false,
+          cooldownUntil: null,
+          now: now,
+        ),
+        isTrue,
+      );
+      expect(
+        LineSwitchUtil.shouldTriggerWsDisconnectFailover(
+          consecutiveDisconnectsWithoutConnect: 2,
+          deviceOffline: true,
+          cooldownUntil: null,
+          now: now,
+        ),
+        isFalse,
+      );
+      expect(
+        LineSwitchUtil.shouldTriggerWsDisconnectFailover(
+          consecutiveDisconnectsWithoutConnect: 2,
+          deviceOffline: false,
+          cooldownUntil: now.add(const Duration(seconds: 30)),
+          now: now,
+        ),
+        isFalse,
       );
     });
 
@@ -147,6 +231,98 @@ void main() {
           triedIds: lines.map((e) => e.id).toSet(),
         ),
         isNull,
+      );
+    });
+
+    test('shouldSkipApiConnectionFailover 无网必跳过', () {
+      expect(
+        LineSwitchUtil.shouldSkipApiConnectionFailover(
+          deviceOffline: true,
+          hasTriedInWave: false,
+          cooldownUntil: null,
+        ),
+        isTrue,
+      );
+      expect(
+        LineSwitchUtil.shouldSkipApiConnectionFailover(
+          deviceOffline: true,
+          hasTriedInWave: true,
+          cooldownUntil: null,
+        ),
+        isTrue,
+      );
+    });
+
+    test('shouldSkipApiConnectionFailover 冷却仅拦新波', () {
+      final now = DateTime.fromMillisecondsSinceEpoch(1_000_000);
+      final until = now.add(const Duration(seconds: 10));
+      expect(
+        LineSwitchUtil.shouldSkipApiConnectionFailover(
+          deviceOffline: false,
+          hasTriedInWave: false,
+          cooldownUntil: until,
+          now: now,
+        ),
+        isTrue,
+      );
+      expect(
+        LineSwitchUtil.shouldSkipApiConnectionFailover(
+          deviceOffline: false,
+          hasTriedInWave: true,
+          cooldownUntil: until,
+          now: now,
+        ),
+        isFalse,
+      );
+      expect(
+        LineSwitchUtil.shouldSkipApiConnectionFailover(
+          deviceOffline: false,
+          hasTriedInWave: false,
+          cooldownUntil: until,
+          now: until.add(const Duration(seconds: 1)),
+        ),
+        isFalse,
+      );
+      expect(
+        LineSwitchUtil.apiConnectionFailoverCooldown,
+        const Duration(seconds: 30),
+      );
+    });
+
+    test('isProbeFreshForApiFailover 过期或不通不可用', () {
+      final now = DateTime.fromMillisecondsSinceEpoch(1_000_000);
+      expect(
+        LineSwitchUtil.isProbeFreshForApiFailover(
+          LineProbeCacheEntry(
+            ok: true,
+            latencyMs: 40,
+            checkedAtMs: now.millisecondsSinceEpoch - 60_000,
+          ),
+          now: now,
+        ),
+        isTrue,
+      );
+      expect(
+        LineSwitchUtil.isProbeFreshForApiFailover(
+          LineProbeCacheEntry(
+            ok: true,
+            latencyMs: 40,
+            checkedAtMs: now.millisecondsSinceEpoch -
+                const Duration(minutes: 6).inMilliseconds,
+          ),
+          now: now,
+        ),
+        isFalse,
+      );
+      expect(
+        LineSwitchUtil.isProbeFreshForApiFailover(
+          LineProbeCacheEntry(
+            ok: false,
+            checkedAtMs: now.millisecondsSinceEpoch,
+          ),
+          now: now,
+        ),
+        isFalse,
       );
     });
 
@@ -223,6 +399,8 @@ void main() {
     });
 
     tearDown(() async {
+      // upsertAll 会 unawaited 写 Hive；先让挂起的 persist 跑完再 close。
+      await Future<void>.delayed(const Duration(milliseconds: 50));
       container.dispose();
       await db.close();
       await Hive.close();
@@ -274,6 +452,61 @@ void main() {
             excludeId: kLines[0].id,
           );
       expect(pick?.id, kLines[1].id);
+    });
+
+    test('fallbackOnConnectionError 有探通候选时 adopt 并重连 WS', () async {
+      // Debug 默认本地线；用生产线 id 模拟坏线。
+      await container.read(lineProvider.notifier).switchTo('line1');
+      ws.reconnectCount = 0;
+      final nowMs = DateTime.now().millisecondsSinceEpoch;
+      container.read(lineProbeCacheProvider.notifier).upsertAll({
+        'line1': LineProbeCacheEntry(
+          ok: false,
+          checkedAtMs: nowMs,
+        ),
+        'line2': LineProbeCacheEntry(
+          ok: true,
+          latencyMs: 40,
+          checkedAtMs: nowMs,
+        ),
+      });
+
+      final switched =
+          await container.read(lineProvider.notifier).fallbackOnConnectionError();
+      expect(switched, isTrue);
+      expect(container.read(lineProvider).id, 'line2');
+      expect(ws.reconnectCount, 1);
+    });
+
+    test('fallbackOnConnectionError 过期探活不 adopt', () async {
+      await container.read(lineProvider.notifier).switchTo('line1');
+      final staleMs = DateTime.now()
+          .subtract(const Duration(minutes: 10))
+          .millisecondsSinceEpoch;
+      container.read(lineProbeCacheProvider.notifier).upsertAll({
+        'line2': LineProbeCacheEntry(
+          ok: true,
+          latencyMs: 40,
+          checkedAtMs: staleMs,
+        ),
+      });
+      final switched =
+          await container.read(lineProvider.notifier).fallbackOnConnectionError();
+      expect(switched, isFalse);
+      expect(container.read(lineProvider).id, 'line1');
+    });
+
+    test('fallbackOnConnectionError 无候选时返回 false', () async {
+      await container.read(lineProvider.notifier).switchTo('line1');
+      final nowMs = DateTime.now().millisecondsSinceEpoch;
+      container.read(lineProbeCacheProvider.notifier).upsertAll({
+        'line1': LineProbeCacheEntry(ok: false, checkedAtMs: nowMs),
+        'line2': LineProbeCacheEntry(ok: false, checkedAtMs: nowMs),
+      });
+      final switched =
+          await container.read(lineProvider.notifier).fallbackOnConnectionError();
+      expect(switched, isFalse);
+      expect(container.read(lineProvider).id, 'line1');
     });
   });
 

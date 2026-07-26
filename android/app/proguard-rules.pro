@@ -23,3 +23,5 @@
 -keepclasseswithmembernames class * {
     native <methods>;
 }
+# im_device_id plugin (device fingerprint channel)
+-keep class com.cyberis.vortek.deviceid.** { *; }

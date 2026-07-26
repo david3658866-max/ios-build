@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:convert';
 
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -38,6 +40,28 @@ final wsManagerProvider = Provider<WsManager>((ref) {
   return ws;
 });
 
+/// forceReconnect / 主动切线导致的短暂 disconnected 计数，不计入 WS 切线 streak。
+class ExpectedWsReconnectNotifier extends Notifier<int> {
+  @override
+  int build() => 0;
+
+  void note() => state++;
+
+  /// 消费一次；若无可消费返回 false。
+  bool consume() {
+    if (state <= 0) return false;
+    state--;
+    return true;
+  }
+
+  void reset() => state = 0;
+}
+
+final expectedWsReconnectProvider =
+    NotifierProvider<ExpectedWsReconnectNotifier, int>(
+  ExpectedWsReconnectNotifier.new,
+);
+
 /// 当前线路。初值读 KV，切换时写回 KV 并强制 WS 重连到新线路。
 class LineNotifier extends Notifier<LineConfig> {
   Future<bool>? _lineCheckFuture;
@@ -47,6 +71,36 @@ class LineNotifier extends Notifier<LineConfig> {
 
   /// 最近一次并发探活中可用的线路（按延迟升序）。供注册/登录失败换线使用。
   List<LineConfig> lastHealthyLines = const [];
+
+  /// API 连接失败自动切线：单飞，并行失败共用一次切线结果。
+  Future<bool>? _apiFailoverFuture;
+
+  /// 静默探活单飞。
+  Future<void>? _silentProbeFuture;
+
+  /// 登录/面板/failover 批量探活是否进行中（供静默探避让）。
+  bool _batchProbeBusy = false;
+
+  /// 静默探冷却（与任意批量探活共用）。
+  static const Duration silentProbeCooldown = Duration(minutes: 5);
+
+  /// 静默合并时，旧通线缓存有效期。
+  static const Duration silentHealthyTtl = Duration(minutes: 10);
+
+  /// 本波已试过的线路（含失败的当前线）；请求成功后清空。
+  final Set<String> _apiFailoverTriedIds = {};
+
+  /// 本波已成功自动切线次数（限制连跳，避免多次 WS 重连）。
+  int _apiFailoverSwitchCount = 0;
+
+  /// 上一波自动切线成功并恢复请求后的冷却截止时间。
+  DateTime? _apiFailoverCooldownUntil;
+
+  /// WS 连续断开自动切线单飞。
+  Future<bool>? _wsFailoverFuture;
+
+  /// WS 自动切线冷却截止。
+  DateTime? _wsFailoverCooldownUntil;
 
   void _bumpProbeEpoch() => _probeEpoch++;
 
@@ -62,31 +116,68 @@ class LineNotifier extends Notifier<LineConfig> {
   }
 
   /// 拉取远程线路表；若当前线被移除则切到新表第一条。
-  Future<void> refreshRemoteLineConfig() async {
-    if (!ref.mounted) return;
+  ///
+  /// [baseUrl] 非空时走该绝对 API 根（`https://host/api`），不依赖当前 Dio baseUrl。
+  /// 返回是否成功打到服务端（含 notModified）。
+  Future<bool> refreshRemoteLineConfig({String? baseUrl}) async {
+    if (!ref.mounted) return false;
     final dio = ref.read(dioClientProvider).dio;
+    final beforeVersion = LineRepository.instance.configVersion;
+    final beforeIds =
+        LineRepository.instance.productionLines.map((e) => e.id).join(',');
+    final reached = await LineRepository.instance.refreshFromRemote(
+      dio,
+      baseUrl: baseUrl,
+    );
+    if (!ref.mounted || !reached) return reached;
+    final afterVersion = LineRepository.instance.configVersion;
+    final afterIds =
+        LineRepository.instance.productionLines.map((e) => e.id).join(',');
     final changed =
-        await LineRepository.instance.refreshFromRemote(dio);
-    if (!ref.mounted || !changed) return;
+        beforeVersion != afterVersion || beforeIds != afterIds;
+    if (!changed) return true;
     final currentId = state.id;
-    if (currentId == kLocalDevLine.id) return;
+    if (currentId == kLocalDevLine.id) return true;
     final still = LineRepository.instance.productionLines
         .any((e) => e.id == currentId);
     if (still) {
       // 同 id 可能换了 host：刷新 state
       state = lineById(currentId);
-      return;
+      return true;
     }
     final next = LineRepository.instance.defaultLine;
     final kv = ref.read(kvStoreProvider);
     await kv.setLineId(next.id);
-    if (!ref.mounted) return;
+    if (!ref.mounted) return true;
     state = next;
     log.i('[Line] current removed by remote, switch -> ${next.id}');
     final token = kv.accessToken;
     if (token != null && token.isNotEmpty) {
       await onLineSwitched();
     }
+    return true;
+  }
+
+  /// 当前线拉配置失败时，用已探通线路的绝对 baseUrl 补拉。
+  Future<bool> _refreshRemoteConfigFromHealthy(
+    List<LineConfig> healthy,
+  ) async {
+    if (!ref.mounted || healthy.isEmpty) return false;
+    final preferred = <LineConfig>[
+      if (healthy.any((e) => e.id == state.id))
+        healthy.firstWhere((e) => e.id == state.id),
+      ...healthy.where((e) => e.id != state.id),
+    ];
+    for (final line in preferred) {
+      if (line.id == kLocalDevLine.id) continue;
+      final ok = await refreshRemoteLineConfig(baseUrl: line.baseUrl);
+      if (!ref.mounted) return false;
+      if (ok) {
+        log.i('[Line] remote config via healthy ${line.id}@${line.host}');
+        return true;
+      }
+    }
+    return false;
   }
 
   /// 登出时回主线路（保留本地开发线路；仅清理不可用的备用线路场景）。
@@ -175,7 +266,10 @@ class LineNotifier extends Notifier<LineConfig> {
     final isLoggedIn = token != null && token.isNotEmpty;
 
     if (line.id == state.id) {
-      markCurrentLineConnected(source: triggerSource);
+      if (!ref.mounted) {
+        return LineSwitchOutcome(success: false, switched: false, line: line);
+      }
+      ref.read(configStoreProvider.notifier).setLineStatus(WsStatus.connected);
       return LineSwitchOutcome(success: true, switched: false, line: line);
     }
 
@@ -206,6 +300,8 @@ class LineNotifier extends Notifier<LineConfig> {
     final config = ref.read(configStoreProvider.notifier);
     config.setChatSyncLoading(true);
     unawaited(config.loadConfig());
+    // forceReconnect 会先发 disconnected 再 connecting：忽略这次断开，避免误计 WS 切线 streak。
+    ref.read(expectedWsReconnectProvider.notifier).note();
     ref.read(wsManagerProvider).forceReconnect(
           wsUrl: state.wsUrl,
           token: token,
@@ -224,10 +320,171 @@ class LineNotifier extends Notifier<LineConfig> {
     ref.read(configStoreProvider.notifier).setAppInit(true);
   }
 
-  /// 对齐 uniapp：API 失败不自动改线路，由用户在面板手动切换。
-  Future<bool> fallbackOnConnectionError() async => false;
+  /// API 连接类失败时静默切到已探通线路；无候选 / 无网 / 冷却则返回 false。
+  Future<bool> fallbackOnConnectionError() async {
+    final existing = _apiFailoverFuture;
+    if (existing != null) return existing;
+    final future = _runApiConnectionFailover();
+    _apiFailoverFuture = future;
+    try {
+      return await future;
+    } finally {
+      if (identical(_apiFailoverFuture, future)) {
+        _apiFailoverFuture = null;
+      }
+    }
+  }
+
+  Future<bool> _runApiConnectionFailover() async {
+    if (!ref.mounted) return false;
+    final deviceOffline = await _isDeviceOffline();
+    if (LineSwitchUtil.shouldSkipApiConnectionFailover(
+      deviceOffline: deviceOffline,
+      hasTriedInWave: _apiFailoverTriedIds.isNotEmpty,
+      cooldownUntil: _apiFailoverCooldownUntil,
+    )) {
+      log.i(
+        '[Line] api failover skipped '
+        '(offline=$deviceOffline tried=${_apiFailoverTriedIds.length})',
+      );
+      return false;
+    }
+
+    // 本波已切过：不再连跳到第三条线（WS 重连成本高）；由拦截器靠新 baseUrl 重试。
+    if (_apiFailoverSwitchCount >=
+        LineSwitchUtil.apiFailoverMaxSwitchesPerWave) {
+      log.i('[Line] api failover: already switched this wave, skip further');
+      return false;
+    }
+
+    _apiFailoverTriedIds.add(state.id);
+    final next = bestHealthyCandidate(
+      excludeId: state.id,
+      excludeIds: _apiFailoverTriedIds,
+      requireFreshProbe: true,
+    );
+    if (next == null) {
+      log.w('[Line] api failover: no healthy candidate');
+      return false;
+    }
+
+    final outcome = await adoptHealthyLine(
+      next.id,
+      triggerSource: 'api_connection_failover',
+    );
+    if (!ref.mounted) return false;
+    if (!outcome.success || !outcome.switched) {
+      _apiFailoverTriedIds.add(next.id);
+      log.w('[Line] api failover adopt failed -> ${next.id}');
+      return false;
+    }
+    _apiFailoverTriedIds.add(next.id);
+    _apiFailoverSwitchCount++;
+    log.i('[Line] api failover -> ${next.id}');
+    return true;
+  }
+
+  /// WS 连续断开（未达 connected）后自动切到已探通备用线。
+  Future<bool> failoverOnWsFailure() async {
+    final existing = _wsFailoverFuture;
+    if (existing != null) return existing;
+    final future = _runWsDisconnectFailover();
+    _wsFailoverFuture = future;
+    try {
+      return await future;
+    } finally {
+      if (identical(_wsFailoverFuture, future)) {
+        _wsFailoverFuture = null;
+      }
+    }
+  }
+
+  Future<bool> _runWsDisconnectFailover() async {
+    if (!ref.mounted) return false;
+    final deviceOffline = await _isDeviceOffline();
+    if (deviceOffline) {
+      log.i('[Line] ws failover skipped (device offline)');
+      return false;
+    }
+    final cooldownUntil = _wsFailoverCooldownUntil;
+    if (cooldownUntil != null && DateTime.now().isBefore(cooldownUntil)) {
+      log.i('[Line] ws failover skipped (cooldown)');
+      return false;
+    }
+
+    var next = bestHealthyCandidate(
+      excludeId: state.id,
+      requireFreshProbe: true,
+    );
+    if (next == null) {
+      log.i('[Line] ws failover: refreshHealthyLines');
+      await refreshHealthyLines(triggerSource: 'ws_disconnect_failover_probe');
+      if (!ref.mounted) return false;
+      next = bestHealthyCandidate(
+        excludeId: state.id,
+        requireFreshProbe: true,
+      );
+      next ??= bestHealthyCandidate(
+        excludeId: state.id,
+        requireFreshProbe: false,
+      );
+    }
+    if (next == null) {
+      log.w('[Line] ws failover: no healthy candidate');
+      _wsFailoverCooldownUntil = DateTime.now().add(const Duration(seconds: 15));
+      return false;
+    }
+
+    final outcome = await adoptHealthyLine(
+      next.id,
+      triggerSource: 'ws_disconnect_failover',
+    );
+    if (!ref.mounted) return false;
+    if (!outcome.success || !outcome.switched) {
+      log.w('[Line] ws failover adopt failed -> ${next.id}');
+      _wsFailoverCooldownUntil = DateTime.now().add(const Duration(seconds: 15));
+      return false;
+    }
+    _wsFailoverCooldownUntil = DateTime.now().add(
+      LineSwitchUtil.wsDisconnectFailoverCooldown,
+    );
+    log.i('[Line] ws failover -> ${next.id}');
+    return true;
+  }
+
+  Future<bool> _isDeviceOffline() async {
+    try {
+      final values = await Connectivity().checkConnectivity();
+      if (values.contains(ConnectivityResult.wifi) ||
+          values.contains(ConnectivityResult.mobile) ||
+          values.contains(ConnectivityResult.ethernet) ||
+          values.contains(ConnectivityResult.vpn)) {
+        return false;
+      }
+      return values.isEmpty ||
+          values.every((e) => e == ConnectivityResult.none);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// 请求成功：结束本波自动切线，并在本波有过切线时进入冷却。
+  void clearApiFailoverWave({bool armCooldown = true}) {
+    if (armCooldown &&
+        (_apiFailoverTriedIds.isNotEmpty || _apiFailoverSwitchCount > 0)) {
+      _apiFailoverCooldownUntil = DateTime.now().add(
+        LineSwitchUtil.apiConnectionFailoverCooldown,
+      );
+    }
+    _apiFailoverTriedIds.clear();
+    _apiFailoverSwitchCount = 0;
+  }
 
   void markCurrentLineConnected({String source = 'request_success'}) {
+    // 仅 HTTP 成功结束自动切线波；WS 连上时清波会误伤并行重试 / 提前进冷却。
+    if (source == 'request_success') {
+      clearApiFailoverWave();
+    }
     if (!ref.mounted) return;
     final config = ref.read(configStoreProvider);
     if (config.lineStatus == WsStatus.connected) return;
@@ -243,20 +500,39 @@ class LineNotifier extends Notifier<LineConfig> {
     unawaited(ref.read(configStoreProvider.notifier).loadConfig());
   }
 
-  /// 从近期探活结果里选延迟最低的可用线（排除 [excludeId]）。
-  LineConfig? bestHealthyCandidate({required String excludeId}) {
+  /// 从近期探活结果里选延迟最低的可用线（排除 [excludeId] 与 [excludeIds]）。
+  ///
+  /// [requireFreshProbe] 为 true 时只采信 [LineSwitchUtil.apiFailoverProbeMaxAge]
+  /// 内的成功探活，避免 adopt 到过期「通」缓存。
+  LineConfig? bestHealthyCandidate({
+    required String excludeId,
+    Set<String> excludeIds = const {},
+    bool requireFreshProbe = false,
+  }) {
+    final tried = {...excludeIds, excludeId};
+    final cache = ref.read(lineProbeCacheProvider);
+    bool usable(String id) {
+      if (!requireFreshProbe) return true;
+      final entry = cache[id];
+      if (entry == null) return false;
+      return LineSwitchUtil.isProbeFreshForApiFailover(entry);
+    }
+
     final fromLast = LineSwitchUtil.nextHealthyCandidate(
       healthySortedByLatency: lastHealthyLines,
-      triedIds: {excludeId},
+      triedIds: tried,
     );
-    if (fromLast != null) return fromLast;
+    if (fromLast != null && usable(fromLast.id)) return fromLast;
 
-    final cache = ref.read(lineProbeCacheProvider);
     final healthy = <({LineConfig line, int ms})>[];
     for (final line in kVisibleLines) {
-      if (line.id == excludeId) continue;
+      if (tried.contains(line.id)) continue;
       final entry = cache[line.id];
       if (entry == null || !entry.ok) continue;
+      if (requireFreshProbe &&
+          !LineSwitchUtil.isProbeFreshForApiFailover(entry)) {
+        continue;
+      }
       healthy.add((line: line, ms: entry.latencyMs ?? 999999));
     }
     healthy.sort((a, b) => a.ms.compareTo(b.ms));
@@ -320,7 +596,8 @@ class LineNotifier extends Notifier<LineConfig> {
           apiPath: '/line/ping',
           httpStatus: outcome.httpStatus,
         );
-    if (ok) unawaited(ref.read(lineEventQueueProvider).flush());
+    // 成功/失败都上传：登录页未注册用户探活失败也要进后台。
+    unawaited(ref.read(lineEventQueueProvider).flush());
     return ok;
   }
 
@@ -337,7 +614,11 @@ class LineNotifier extends Notifier<LineConfig> {
   /// [allowFallback]=true（登录/注册页）：并发探活全部线上线路；
   /// 当前线通则保留，否则自动切到延迟最低的可用线。
   /// Debug 本机线路优先探本地；本地不通时再探线上（方便真机无 adb 时验证）。
-  Future<bool> checkCurrentLineStatus({bool allowFallback = false}) {
+  /// [exhaustiveProbe]=true：全量探完每条（面板「重新检测」）；默认分批截断。
+  Future<bool> checkCurrentLineStatus({
+    bool allowFallback = false,
+    bool exhaustiveProbe = false,
+  }) {
     return _lineCheckFuture ??= () async {
       await refreshRemoteLineConfig();
       if (!allowFallback) {
@@ -351,58 +632,188 @@ class LineNotifier extends Notifier<LineConfig> {
         if (localOk) return true;
         log.i('[Line] local unavailable, fallback to probeAll remotes');
       }
-      return _probeAllAndSelectBest();
+      return _probeAllAndSelectBest(exhaustive: exhaustiveProbe);
     }().whenComplete(() => _lineCheckFuture = null);
   }
 
   /// 并发探活刷新 [lastHealthyLines] 与探活缓存；不改当前线路、不改 chip 状态。
   /// 供消息页 3s 自动切线在缺少候选时补探。
+  ///
+  /// [exhaustive]=false：健康优先分批（每批 5、满 5 通停）；
+  /// [exhaustive]=true：全量并发（面板重新检测）。
   Future<void> refreshHealthyLines({
     String triggerSource = 'autofailover_probe',
+    bool exhaustive = false,
   }) async {
     if (!ref.mounted) return;
-    await refreshRemoteLineConfig();
-    if (!ref.mounted) return;
-    final manager = ref.read(lineManagerProvider);
-    final results = await manager.probeAll(lines: kLines);
-    if (!ref.mounted) return;
+    _batchProbeBusy = true;
+    try {
+      final configReached = await refreshRemoteLineConfig();
+      if (!ref.mounted) return;
+      final manager = ref.read(lineManagerProvider);
+      final prior = ref.read(lineProbeCacheProvider);
+      final results = exhaustive
+          ? await manager.probeAll(lines: kLines)
+          : await manager.probeAllBatched(
+              lines: kLines,
+              priorHealth: prior,
+            );
+      if (!ref.mounted) return;
 
-    final healthy = <({LineConfig line, int ms})>[];
-    final cacheUpdates = <String, LineProbeCacheEntry>{};
-    for (final r in results) {
-      final outcome = r.outcome;
-      final ms = outcome.latencyMs;
-      cacheUpdates[r.line.id] = LineProbeCacheEntry.fromOutcome(outcome);
-      await ref.read(lineEventQueueProvider).record(
-            eventType: 'line_probe_result',
-            triggerSource: triggerSource,
-            line: r.line,
-            success: outcome.ok,
-            latencyMs: ms,
-            errorCategory:
-                outcome.ok ? null : (outcome.errorCategory ?? 'unknown'),
-            errorMessage: outcome.errorMessage,
-            apiPath: '/line/ping',
-            httpStatus: outcome.httpStatus,
-          );
-      if (outcome.ok && ms != null) {
-        healthy.add((line: r.line, ms: ms));
+      final healthy = <({LineConfig line, int ms})>[];
+      final cacheUpdates = <String, LineProbeCacheEntry>{};
+      for (final r in results) {
+        final outcome = r.outcome;
+        final ms = outcome.latencyMs;
+        cacheUpdates[r.line.id] = LineProbeCacheEntry.fromOutcome(outcome);
+        await ref.read(lineEventQueueProvider).record(
+              eventType: 'line_probe_result',
+              triggerSource: triggerSource,
+              line: r.line,
+              success: outcome.ok,
+              latencyMs: ms,
+              errorCategory:
+                  outcome.ok ? null : (outcome.errorCategory ?? 'unknown'),
+              errorMessage: outcome.errorMessage,
+              apiPath: '/line/ping',
+              httpStatus: outcome.httpStatus,
+            );
+        if (outcome.ok && ms != null) {
+          healthy.add((line: r.line, ms: ms));
+        }
       }
+      if (ref.mounted) {
+        ref.read(lineProbeCacheProvider.notifier).upsertAll(cacheUpdates);
+      }
+      healthy.sort((a, b) => a.ms.compareTo(b.ms));
+      lastHealthyLines = healthy.map((e) => e.line).toList(growable: false);
+      // 当前线拉配置失败时：任意探通线都可补拉完整线路表。
+      if (!configReached && lastHealthyLines.isNotEmpty) {
+        await _refreshRemoteConfigFromHealthy(lastHealthyLines);
+        if (!ref.mounted) return;
+      }
+      if (healthy.isEmpty && results.isNotEmpty) {
+        await _recordPublicContrastRound(
+          triggerSource: triggerSource,
+          lineCount: results.length,
+          okCount: 0,
+          failCount: results.length,
+        );
+      }
+      await ref.read(kvStoreProvider).setLastBatchProbeAtMs(
+            DateTime.now().millisecondsSinceEpoch,
+          );
+      unawaited(ref.read(lineEventQueueProvider).flush());
+    } finally {
+      _batchProbeBusy = false;
     }
-    if (ref.mounted) {
-      ref.read(lineProbeCacheProvider.notifier).upsertAll(cacheUpdates);
+  }
+
+  /// 回前台轻量静默探：最多 1 批 5 条；不切线、不改 chip、不 Toast。
+  Future<void> silentProbeOnResume() {
+    return _silentProbeFuture ??= () async {
+      try {
+        await _silentProbeOnResumeBody();
+      } finally {
+        _silentProbeFuture = null;
+      }
+    }();
+  }
+
+  Future<void> _silentProbeOnResumeBody() async {
+    if (!ref.mounted) return;
+    if (_lineCheckFuture != null || _batchProbeBusy) {
+      log.i('[Line] silentProbe skip: batch probe busy');
+      return;
     }
-    healthy.sort((a, b) => a.ms.compareTo(b.ms));
-    lastHealthyLines = healthy.map((e) => e.line).toList(growable: false);
-    if (healthy.isEmpty && results.isNotEmpty) {
-      await _recordPublicContrastRound(
-        triggerSource: triggerSource,
-        lineCount: results.length,
-        okCount: 0,
-        failCount: results.length,
+    if (ref.read(authControllerProvider) != AuthStatus.authenticated) {
+      return;
+    }
+    final kv = ref.read(kvStoreProvider);
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    final last = kv.lastBatchProbeAtMs ?? 0;
+    if (nowMs - last < silentProbeCooldown.inMilliseconds) {
+      log.i('[Line] silentProbe skip: cooldown');
+      return;
+    }
+    try {
+      final values = await Connectivity().checkConnectivity();
+      final offline = values.isEmpty ||
+          values.every((e) => e == ConnectivityResult.none);
+      if (offline) {
+        log.i('[Line] silentProbe skip: offline');
+        return;
+      }
+    } catch (_) {
+      // connectivity 失败仍尝试探，由超时自然失败。
+    }
+    if (!ref.mounted || _lineCheckFuture != null || _batchProbeBusy) return;
+
+    _batchProbeBusy = true;
+    await kv.setLastBatchProbeAtMs(nowMs);
+    try {
+      final manager = ref.read(lineManagerProvider);
+      final prior = ref.read(lineProbeCacheProvider);
+      final results = await manager.probeAllBatched(
+        lines: kLines,
+        priorHealth: prior,
+        maxBatches: 1,
       );
+      if (!ref.mounted) return;
+
+      final cacheUpdates = <String, LineProbeCacheEntry>{};
+      var okCount = 0;
+      for (final r in results) {
+        final entry = LineProbeCacheEntry.fromOutcome(r.outcome);
+        cacheUpdates[r.line.id] = entry;
+        if (r.outcome.ok) okCount++;
+        await ref.read(lineEventQueueProvider).record(
+              eventType: 'line_probe_result',
+              triggerSource: 'silent_resume',
+              line: r.line,
+              success: r.outcome.ok,
+              latencyMs: r.outcome.latencyMs,
+              errorCategory: r.outcome.ok
+                  ? null
+                  : (r.outcome.errorCategory ?? 'unknown'),
+              errorMessage: r.outcome.errorMessage,
+              apiPath: '/line/ping',
+              httpStatus: r.outcome.httpStatus,
+            );
+      }
+      if (ref.mounted) {
+        ref.read(lineProbeCacheProvider.notifier).upsertAll(cacheUpdates);
+      }
+      final mergedCache = <String, LineProbeCacheEntry>{
+        ...ref.read(lineProbeCacheProvider),
+        ...cacheUpdates,
+      };
+      lastHealthyLines = mergeSilentHealthyLines(
+        previousHealthy: lastHealthyLines,
+        cache: mergedCache,
+        batchResults: results,
+        nowMs: DateTime.now().millisecondsSinceEpoch,
+        ttlMs: silentHealthyTtl.inMilliseconds,
+      );
+      await ref.read(lineEventQueueProvider).record(
+            eventType: 'line_probe_round',
+            triggerSource: 'silent_resume',
+            success: okCount > 0,
+            extra: {
+              'lineCount': results.length,
+              'okCount': okCount,
+              'failCount': results.length - okCount,
+              'maxBatches': 1,
+            },
+          );
+      unawaited(ref.read(lineEventQueueProvider).flush());
+      log.i(
+        '[Line] silentProbe probed=${results.length} ok=$okCount '
+        'healthy=${lastHealthyLines.length}',
+      );
+    } finally {
+      _batchProbeBusy = false;
     }
-    unawaited(ref.read(lineEventQueueProvider).flush());
   }
 
   /// Domestic-only: when a full probe round has zero healthy lines, contrast
@@ -459,12 +870,15 @@ class LineNotifier extends Notifier<LineConfig> {
   }
 
   /// 并发探活 → 选可用线。登录页进入时用；已登录切线时会重连 WS。
-  Future<bool> _probeAllAndSelectBest() async {
+  Future<bool> _probeAllAndSelectBest({bool exhaustive = false}) async {
     if (!ref.mounted) return false;
     final epoch = _probeEpoch;
     final fromLine = state;
     ref.read(configStoreProvider.notifier).setLineStatus(WsStatus.connecting);
-    await refreshHealthyLines(triggerSource: 'auth_probe_all');
+    await refreshHealthyLines(
+      triggerSource: 'auth_probe_all',
+      exhaustive: exhaustive,
+    );
     if (!ref.mounted) return false;
     if (epoch != _probeEpoch) {
       log.i('[Line] probeAll superseded, skip select');
@@ -581,18 +995,62 @@ class LineNotifier extends Notifier<LineConfig> {
 final lineProvider =
     NotifierProvider<LineNotifier, LineConfig>(LineNotifier.new);
 
-/// 最近一次各线路探活缓存（面板展示通/不通/延迟）。
+/// 最近一次各线路探活缓存（面板展示通/不通/延迟；Hive 持久化供下次优先探通线）。
 class LineProbeCacheNotifier extends Notifier<Map<String, LineProbeCacheEntry>> {
   @override
-  Map<String, LineProbeCacheEntry> build() => const {};
+  Map<String, LineProbeCacheEntry> build() {
+    return _loadFromKv(ref.read(kvStoreProvider));
+  }
+
+  static Map<String, LineProbeCacheEntry> _loadFromKv(KvStore kv) {
+    final raw = kv.lineProbeHealthRaw;
+    if (raw.isEmpty) return const {};
+    final out = <String, LineProbeCacheEntry>{};
+    for (final e in raw.entries) {
+      final v = e.value;
+      if (v is! Map) continue;
+      final map = Map<String, dynamic>.from(v);
+      final ok = map['ok'] == true;
+      final checkedAtMs = (map['checkedAtMs'] is num)
+          ? (map['checkedAtMs'] as num).toInt()
+          : 0;
+      final latencyMs = map['latencyMs'] is num
+          ? (map['latencyMs'] as num).toInt()
+          : null;
+      out[e.key] = LineProbeCacheEntry(
+        ok: ok,
+        checkedAtMs: checkedAtMs,
+        latencyMs: latencyMs,
+        errorCategory: map['errorCategory']?.toString(),
+      );
+    }
+    return out;
+  }
+
+  Future<void> _persist() async {
+    final kv = ref.read(kvStoreProvider);
+    final map = <String, dynamic>{};
+    for (final e in state.entries) {
+      map[e.key] = {
+        'ok': e.value.ok,
+        'checkedAtMs': e.value.checkedAtMs,
+        'latencyMs': e.value.latencyMs,
+        if (e.value.errorCategory != null)
+          'errorCategory': e.value.errorCategory,
+      };
+    }
+    await kv.setLineProbeHealthJson(jsonEncode(map));
+  }
 
   void upsert(String lineId, LineProbeCacheEntry entry) {
     state = {...state, lineId: entry};
+    unawaited(_persist());
   }
 
   void upsertAll(Map<String, LineProbeCacheEntry> entries) {
     if (entries.isEmpty) return;
     state = {...state, ...entries};
+    unawaited(_persist());
   }
 }
 

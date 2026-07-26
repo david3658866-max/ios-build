@@ -90,3 +90,29 @@ bool isConnectionDioError(DioException err) {
       msg.contains('connection took longer') ||
       msg.contains('socketexception');
 }
+
+/// 是否值得触发「换线路」重试。
+///
+/// 比 [isConnectionDioError] 更严：`receiveTimeout` 多为业务慢/服务端慢，
+/// 不代表当前线路 Host 不可达，自动切线只会白白重连 WS、伤体验。
+bool isLineFailoverDioError(DioException err) {
+  switch (err.type) {
+    case DioExceptionType.connectionError:
+    case DioExceptionType.connectionTimeout:
+    case DioExceptionType.sendTimeout:
+      return true;
+    case DioExceptionType.receiveTimeout:
+      return false;
+    case DioExceptionType.unknown:
+      break;
+    default:
+      return false;
+  }
+  final msg = err.message?.toLowerCase() ?? '';
+  return msg.contains('failed host lookup') ||
+      msg.contains('network is unreachable') ||
+      msg.contains('connection refused') ||
+      msg.contains('connection errored') ||
+      msg.contains('connection took longer') ||
+      msg.contains('socketexception');
+}

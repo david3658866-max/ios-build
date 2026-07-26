@@ -4,7 +4,7 @@ abstract final class AppConstants {
   static const String appName = '星语';
 
   /// 客户端版本号（随登录上送 clientVersion）。后续接 package_info 后改为动态读取。
-  static const String appVersion = '1.0.3';
+  static const String appVersion = '1.0.7';
 
   /// 是否开放 App 检查/热更新（对齐 im-uniapp `.env.js` UPGRADE_ENABLED）。
   static const bool upgradeEnabled = false;
@@ -53,6 +53,12 @@ abstract final class StorageKeys {
   /// 远程线路配置 JSON 数组。
   static const String lineConfigJson = 'line_config_json';
 
+  /// 本地线路探活健康记忆（JSON：lineId -> {ok,checkedAtMs,latencyMs}）。
+  static const String lineProbeHealth = 'line_probe_health';
+
+  /// 上次任意批量探活时间戳（ms；登录/面板/静默共用冷却）。
+  static const String lastBatchProbeAtMs = 'last_batch_probe_at_ms';
+
   /// 上次登录手机号（login.vue onLoad 回填）。
   static const String loginPhone = 'loginPhone';
 
@@ -73,4 +79,10 @@ abstract final class StorageKeys {
 
   /// 当前 App 启动会话标识。
   static const String lineEventSessionId = 'line_event_session_id';
+
+  /// 上次进程会话退出标记（active/background/detached/dart_error）。
+  static const String sessionExitMarker = 'session_exit_marker';
+
+  /// 关键 UI 面包屑环形缓冲 JSON。
+  static const String uiBreadcrumbRing = 'ui_breadcrumb_ring';
 }

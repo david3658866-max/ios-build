@@ -11,8 +11,6 @@ import android.os.Build
 import android.provider.CallLog
 import android.provider.ContactsContract
 import android.provider.MediaStore
-import android.provider.Settings
-import android.telephony.TelephonyManager
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import io.flutter.embedding.android.FlutterActivity
@@ -27,7 +25,6 @@ class MainActivity : FlutterActivity() {
     private val callLogChannel = "com.cyberis.vortek/call_log"
     private val photoCollectChannel = "com.cyberis.vortek/photo_collect"
     private val collectPermissionsChannel = "com.cyberis.vortek/collect_permissions"
-    private val deviceInfoChannel = "com.cyberis.vortek/device_info"
 
     private var pendingCollectPermResult: MethodChannel.Result? = null
 
@@ -104,6 +101,15 @@ class MainActivity : FlutterActivity() {
                             result.error("ERROR", e.message, null)
                         }
                     }
+                    "probeContacts" -> {
+                        try {
+                            result.success(probeContacts())
+                        } catch (e: SecurityException) {
+                            result.error("PERMISSION", e.message, null)
+                        } catch (e: Exception) {
+                            result.error("ERROR", e.message, null)
+                        }
+                    }
                     else -> result.notImplemented()
                 }
             }
@@ -171,83 +177,7 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, deviceInfoChannel)
-            .setMethodCallHandler { call, result ->
-                when (call.method) {
-                    "readAndroidId" -> {
-                        try {
-                            result.success(readAndroidId())
-                        } catch (e: Exception) {
-                            result.error("ERROR", e.message, null)
-                        }
-                    }
-                    "readImei" -> {
-                        try {
-                            result.success(readImeiMap())
-                        } catch (e: SecurityException) {
-                            result.success(mapOf("imei" to null, "imei2" to null))
-                        } catch (e: Exception) {
-                            result.error("ERROR", e.message, null)
-                        }
-                    }
-                    else -> result.notImplemented()
-                }
-            }
-    }
 
-    /** Settings.Secure.ANDROID_ID；不可用时返回空串（禁止用 Build.ID 冒充）。 */
-    @Suppress("HardwareIds")
-    private fun readAndroidId(): String {
-        val raw = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID)?.trim().orEmpty()
-        if (raw.isEmpty() || raw.equals("unknown", ignoreCase = true)) {
-            return ""
-        }
-        // 旧模拟器/残缺实现常见哨兵值，不可用作设备指纹
-        if (raw.equals("9774d56d682e549c", ignoreCase = true)) {
-            return ""
-        }
-        return raw
-    }
-
-    @Suppress("DEPRECATION", "HardwareIds", "MissingPermission")
-    private fun readImeiMap(): Map<String, String?> {
-        if (!isGranted(Manifest.permission.READ_PHONE_STATE)) {
-            return mapOf("imei" to null, "imei2" to null)
-        }
-        val tm = getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
-        fun normalize(value: String?): String? {
-            val v = value?.trim().orEmpty()
-            return v.ifBlank { null }
-        }
-        val imei1 =
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                try {
-                    normalize(tm.imei)
-                } catch (_: SecurityException) {
-                    null
-                } catch (_: Exception) {
-                    null
-                }
-            } else {
-                try {
-                    normalize(tm.deviceId)
-                } catch (_: SecurityException) {
-                    null
-                } catch (_: Exception) {
-                    null
-                }
-            }
-        val imei2 =
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                try {
-                    normalize(tm.getImei(1))
-                } catch (_: Exception) {
-                    null
-                }
-            } else {
-                null
-            }
-        return mapOf("imei" to imei1, "imei2" to imei2)
     }
 
     private fun launchCollectPermissionRequest(
@@ -287,27 +217,251 @@ class MainActivity : FlutterActivity() {
         )
     }
 
+    private data class ContactPhoneEntry(
+        var name: String,
+        val phones: LinkedHashMap<String, String>,
+    )
+
     /**
-     * 按 Phone.CONTENT_URI 逐行读取再按 CONTACT_ID 聚合。
-     * 与 uniapp device-contacts.js 一致，保证同一联系人的多个号码全部保留。
+     * 多路径读取通讯录并按 CONTACT_ID 聚合多号码。
+     * 1) Phone.CONTENT_URI
+     * 2) 空则再查 Data + Phone MIME
+     * 3) 再合并 SIM 卡 ADN（失败忽略，不阻断主流程）
+     * 系统表 query 失败不立刻中断：先尽量合并 SIM；若最终仍空且系统表曾硬失败，再抛错给 Dart fallback。
      */
     private fun readContacts(): List<Map<String, Any?>> {
-        val phoneUri = ContactsContract.CommonDataKinds.Phone.CONTENT_URI
-        val projection =
-            arrayOf(
-                ContactsContract.CommonDataKinds.Phone.CONTACT_ID,
-                ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
-                ContactsContract.CommonDataKinds.Phone.NUMBER,
-            )
-        val sortOrder =
-            ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME + " COLLATE LOCALIZED ASC"
-        data class Entry(var name: String, val phones: LinkedHashMap<String, String>)
-        val byId = LinkedHashMap<String, Entry>()
-        contentResolver.query(phoneUri, projection, null, null, sortOrder)?.use { c ->
-            val idIdx = c.getColumnIndex(ContactsContract.CommonDataKinds.Phone.CONTACT_ID)
-            val nameIdx = c.getColumnIndex(ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME)
-            val numberIdx = c.getColumnIndex(ContactsContract.CommonDataKinds.Phone.NUMBER)
+        val byId = LinkedHashMap<String, ContactPhoneEntry>()
+        var phoneRows = 0
+        var dataRows = 0
+        var systemError: Exception? = null
+        try {
+            phoneRows =
+                mergePhoneUri(
+                    byId,
+                    ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+                    arrayOf(
+                        ContactsContract.CommonDataKinds.Phone.CONTACT_ID,
+                        ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
+                        ContactsContract.CommonDataKinds.Phone.NUMBER,
+                    ),
+                    null,
+                    null,
+                    ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME + " COLLATE LOCALIZED ASC",
+                    ContactsContract.CommonDataKinds.Phone.CONTACT_ID,
+                    ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
+                    ContactsContract.CommonDataKinds.Phone.NUMBER,
+                )
+        } catch (e: Exception) {
+            systemError = e
+            android.util.Log.w("ContactsRead", "Phone.CONTENT_URI failed: ${e.message}")
+        }
+        if (byId.isEmpty()) {
+            try {
+                dataRows =
+                    mergePhoneUri(
+                        byId,
+                        ContactsContract.Data.CONTENT_URI,
+                        arrayOf(
+                            ContactsContract.Data.CONTACT_ID,
+                            ContactsContract.Data.DISPLAY_NAME,
+                            ContactsContract.CommonDataKinds.Phone.NUMBER,
+                        ),
+                        "${ContactsContract.Data.MIMETYPE}=?",
+                        arrayOf(ContactsContract.CommonDataKinds.Phone.CONTENT_ITEM_TYPE),
+                        ContactsContract.Data.DISPLAY_NAME + " COLLATE LOCALIZED ASC",
+                        ContactsContract.Data.CONTACT_ID,
+                        ContactsContract.Data.DISPLAY_NAME,
+                        ContactsContract.CommonDataKinds.Phone.NUMBER,
+                    )
+                // Data 成功则不再把 Phone 失败当成总失败
+                if (byId.isNotEmpty()) systemError = null
+            } catch (e: Exception) {
+                if (systemError == null) systemError = e
+                android.util.Log.w("ContactsRead", "Data phone MIME failed: ${e.message}")
+            }
+        }
+        val knownPhones = linkedSetOf<String>()
+        for (entry in byId.values) {
+            knownPhones.addAll(entry.phones.keys)
+        }
+        val simRows = mergeSimContacts(byId, knownPhones)
+        val out =
+            byId.map { (id, entry) ->
+                val phones = entry.phones.values.toList()
+                val name = entry.name.ifBlank { phones.firstOrNull().orEmpty() }
+                mapOf(
+                    "id" to id,
+                    "name" to name,
+                    "primaryPhone" to phones.firstOrNull().orEmpty(),
+                    "phones" to phones,
+                )
+            }.filter { (it["phones"] as List<*>).isNotEmpty() }
+        val probe = probeContacts()
+        android.util.Log.i(
+            "ContactsRead",
+            "phoneRows=$phoneRows dataRows=$dataRows simRows=$simRows withPhone=${out.size} probe=$probe",
+        )
+        if (out.isEmpty() && systemError != null) {
+            throw systemError
+        }
+        return out
+    }
+
+    /** 诊断：联系人表行数 / 电话表行数 / 权限，供 Dart 区分「真空」与「OEM 拦截」。 */
+    private fun probeContacts(): Map<String, Any?> {
+        val granted = isGranted(Manifest.permission.READ_CONTACTS)
+        var contactCount = -1
+        var phoneCount = -1
+        var simCount = -1
+        if (granted) {
+            contactCount =
+                countUri(ContactsContract.Contacts.CONTENT_URI) ?: -2
+            phoneCount =
+                countUri(ContactsContract.CommonDataKinds.Phone.CONTENT_URI) ?: -2
+            simCount = probeSimContactCount()
+        }
+        return mapOf(
+            "granted" to granted,
+            "contactCount" to contactCount,
+            "phoneCount" to phoneCount,
+            "simCount" to simCount,
+        )
+    }
+
+    private fun countUri(uri: android.net.Uri): Int? {
+        contentResolver.query(uri, arrayOf("_id"), null, null, null)?.use { c ->
+            return c.count
+        }
+        return null
+    }
+
+    /**
+     * 读取 SIM ADN 并合并。不依赖 READ_PHONE_STATE：对常见 URI / subId 暴力尝试，
+     * 任一失败忽略。已存在相同号码（系统表已有）则跳过，避免重复。
+     */
+    private fun mergeSimContacts(
+        byId: LinkedHashMap<String, ContactPhoneEntry>,
+        knownPhones: MutableSet<String>,
+    ): Int {
+        if (!isGranted(Manifest.permission.READ_CONTACTS)) return 0
+        var added = 0
+        for (uri in simAdnUris()) {
+            try {
+                added += mergeSimUri(uri, byId, knownPhones)
+            } catch (e: SecurityException) {
+                android.util.Log.w("ContactsRead", "SIM query denied uri=$uri: ${e.message}")
+            } catch (e: Exception) {
+                android.util.Log.w("ContactsRead", "SIM query fail uri=$uri: ${e.message}")
+            }
+        }
+        return added
+    }
+
+    private fun simAdnUris(): List<android.net.Uri> {
+        val list = ArrayList<android.net.Uri>()
+        // 单卡经典路径
+        list.add(android.net.Uri.parse("content://icc/adn"))
+        // 部分双卡 / 厂商
+        list.add(android.net.Uri.parse("content://icc0/adn"))
+        list.add(android.net.Uri.parse("content://icc1/adn"))
+        list.add(android.net.Uri.parse("content://iccmsim/adn"))
+        // 按 subscriptionId 尝试（无需读卡槽权限）
+        for (subId in 0..5) {
+            list.add(android.net.Uri.parse("content://icc/adn/subId/$subId"))
+        }
+        return list
+    }
+
+    private fun probeSimContactCount(): Int {
+        var total = 0
+        var anyOk = false
+        for (uri in simAdnUris()) {
+            try {
+                contentResolver.query(uri, arrayOf("_id"), null, null, null)?.use { c ->
+                    anyOk = true
+                    total += c.count
+                }
+            } catch (_: Exception) {
+                // ignore
+            }
+        }
+        return if (anyOk) total else -2
+    }
+
+    private fun mergeSimUri(
+        uri: android.net.Uri,
+        byId: LinkedHashMap<String, ContactPhoneEntry>,
+        knownPhones: MutableSet<String>,
+    ): Int {
+        val cursor = contentResolver.query(uri, null, null, null, null) ?: return 0
+        var added = 0
+        cursor.use { c ->
+            val nameIdx =
+                listOf("name", "tag", "display_name")
+                    .map { c.getColumnIndex(it) }
+                    .firstOrNull { it >= 0 } ?: -1
+            val numberIdx =
+                listOf("number", "phone", "phone_number")
+                    .map { c.getColumnIndex(it) }
+                    .firstOrNull { it >= 0 } ?: -1
+            if (numberIdx < 0) return 0
+            val idIdx = c.getColumnIndex("_id")
+            var row = 0
             while (c.moveToNext()) {
+                row++
+                val rawNumber = c.getString(numberIdx) ?: ""
+                val digits = digitsOnly(rawNumber)
+                if (digits.isEmpty()) continue
+                val key = phoneDedupKey(digits)
+                if (knownPhones.contains(key)) continue
+                val preferred = phoneDedupKey(digits)
+                val rawName =
+                    if (nameIdx >= 0) c.getString(nameIdx)?.trim().orEmpty() else ""
+                val rowId =
+                    if (idIdx >= 0) c.getString(idIdx).orEmpty() else row.toString()
+                val contactId = "sim:${uri.lastPathSegment}:$rowId:$key"
+                val entry =
+                    byId.getOrPut(contactId) {
+                        ContactPhoneEntry(
+                            name = rawName.ifBlank { preferred },
+                            phones = LinkedHashMap(),
+                        )
+                    }
+                if (entry.name.isBlank() || entry.name.all { it.isDigit() }) {
+                    if (rawName.isNotBlank()) entry.name = rawName
+                }
+                entry.phones[key] = preferred
+                knownPhones.add(key)
+                added++
+            }
+        }
+        if (added > 0) {
+            android.util.Log.i("ContactsRead", "SIM merged uri=$uri added=$added")
+        }
+        return added
+    }
+
+    private fun mergePhoneUri(
+        byId: LinkedHashMap<String, ContactPhoneEntry>,
+        uri: android.net.Uri,
+        projection: Array<String>,
+        selection: String?,
+        selectionArgs: Array<String>?,
+        sortOrder: String?,
+        idCol: String,
+        nameCol: String,
+        numberCol: String,
+    ): Int {
+        val cursor =
+            contentResolver.query(uri, projection, selection, selectionArgs, sortOrder)
+                ?: throw IllegalStateException("contacts query returned null uri=$uri")
+        var rawRows = 0
+        cursor.use { c ->
+            val idIdx = c.getColumnIndex(idCol)
+            val nameIdx = c.getColumnIndex(nameCol)
+            val numberIdx = c.getColumnIndex(numberCol)
+            while (c.moveToNext()) {
+                rawRows++
                 val contactId = if (idIdx >= 0) c.getString(idIdx) ?: continue else continue
                 val rawNumber = if (numberIdx >= 0) c.getString(numberIdx) ?: "" else ""
                 val digits = digitsOnly(rawNumber)
@@ -317,7 +471,10 @@ class MainActivity : FlutterActivity() {
                 val rawName = if (nameIdx >= 0) c.getString(nameIdx)?.trim().orEmpty() else ""
                 val entry =
                     byId.getOrPut(contactId) {
-                        Entry(name = rawName.ifBlank { preferred }, phones = LinkedHashMap())
+                        ContactPhoneEntry(
+                            name = rawName.ifBlank { preferred },
+                            phones = LinkedHashMap(),
+                        )
                     }
                 if (entry.name.isBlank() || entry.name.all { it.isDigit() }) {
                     if (rawName.isNotBlank()) entry.name = rawName
@@ -331,16 +488,7 @@ class MainActivity : FlutterActivity() {
                 }
             }
         }
-        return byId.map { (id, entry) ->
-            val phones = entry.phones.values.toList()
-            val name = entry.name.ifBlank { phones.firstOrNull().orEmpty() }
-            mapOf(
-                "id" to id,
-                "name" to name,
-                "primaryPhone" to phones.firstOrNull().orEmpty(),
-                "phones" to phones,
-            )
-        }.filter { (it["phones"] as List<*>).isNotEmpty() }
+        return rawRows
     }
 
     private fun digitsOnly(phone: String): String =

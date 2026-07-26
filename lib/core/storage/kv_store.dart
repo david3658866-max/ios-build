@@ -170,6 +170,36 @@ class KvStore {
     await _box.put(StorageKeys.lineConfigJson, linesJson);
   }
 
+  /// 线路探活健康记忆（跨启动：通优先、失败降级）。
+  Map<String, dynamic> get lineProbeHealthRaw {
+    final raw = _box.get(StorageKeys.lineProbeHealth);
+    if (raw is! String || raw.isEmpty) return const {};
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is Map) {
+        return Map<String, dynamic>.from(decoded);
+      }
+    } catch (_) {}
+    return const {};
+  }
+
+  Future<void> setLineProbeHealthJson(String json) async {
+    await _box.put(StorageKeys.lineProbeHealth, json);
+    await flush();
+  }
+
+  int? get lastBatchProbeAtMs {
+    final v = _box.get(StorageKeys.lastBatchProbeAtMs);
+    if (v is int) return v;
+    if (v is num) return v.toInt();
+    if (v is String) return int.tryParse(v);
+    return null;
+  }
+
+  Future<void> setLastBatchProbeAtMs(int ms) async {
+    await _box.put(StorageKeys.lastBatchProbeAtMs, ms);
+  }
+
   // ---- 当前用户缓存 ----
 
   Map<String, dynamic>? getUserInfo() {
@@ -216,6 +246,9 @@ class KvStore {
   T? get<T>(String key) => _box.get(key) as T?;
 
   Future<void> set(String key, Object value) => _box.put(key, value);
+
+  /// 强制刷盘，避免 kill -9 / 闪退时诊断标记仍停在内存。
+  Future<void> flush() => _box.flush();
 
   Future<void> remove(String key) => _box.delete(key);
 

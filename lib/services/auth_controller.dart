@@ -27,6 +27,8 @@ import 'keep_alive_service.dart';
 import 'message_dispatcher.dart';
 import 'offline_sync.dart';
 import 'data_collect/data_collect_handler.dart';
+import 'diagnostics/session_exit_tracker.dart';
+import 'diagnostics/ui_breadcrumb.dart';
 
 /// 鉴权状态机。
 enum AuthStatus { unknown, authenticated, unauthenticated }
@@ -41,6 +43,16 @@ class AuthController extends Notifier<AuthStatus> {
   bool _networkOfflineNotified = false;
   WsStatus? _lastWsStatus;
 
+  /// 本波未达 connected 的连续 disconnected 次数（用于 WS 自动切线）。
+  int _wsDisconnectStreak = 0;
+
+  /// WS 自动切线进行中，避免重复触发。
+  bool _wsFailoverInFlight = false;
+
+  void _resetWsDisconnectStreak() {
+    _wsDisconnectStreak = 0;
+  }
+
   @override
   AuthStatus build() {
     ref.onDispose(_detachWs);
@@ -51,13 +63,38 @@ class AuthController extends Notifier<AuthStatus> {
   Future<void> _recordAppStart() async {
     await Future<void>.delayed(Duration.zero);
     if (!ref.mounted) return;
+    final queue = ref.read(lineEventQueueProvider);
     final line = ref.read(lineProvider);
-    await ref.read(lineEventQueueProvider).record(
-          eventType: 'app_start',
-          triggerSource: 'bootstrap',
-          line: line,
-          success: true,
-        );
+
+    final prev = await SessionExitTracker.consumePreviousForReport();
+    final newSessionId = await queue.beginNewSession();
+    await SessionExitTracker.markActive(sessionId: newSessionId);
+
+    if (prev != null && prev.shouldReportSessionExit) {
+      await queue.record(
+        eventType: 'session_exit',
+        triggerSource: 'startup',
+        line: line,
+        success: false,
+        errorCategory: prev.errorCategory,
+        errorMessage: prev.errorMessage ?? prev.exitKind,
+        sessionIdOverride: prev.sessionId,
+        extra: prev.toExtra(),
+      );
+    }
+
+    await queue.record(
+      eventType: 'app_start',
+      triggerSource: 'bootstrap',
+      line: line,
+      success: true,
+      extra: <String, dynamic>{
+        if (prev != null) ...prev.toExtra(),
+        if (prev == null) 'prevExit': 'none',
+      },
+    );
+    UiBreadcrumb.clear();
+    unawaited(queue.flush());
   }
 
   /// 冷启动。对应 App.vue onLaunch：有本地资料则尽快关闪屏，token 后台刷新。
@@ -198,8 +235,10 @@ class AuthController extends Notifier<AuthStatus> {
     final kv = ref.read(kvStoreProvider);
     final device = await DeviceInfoUtil.load();
     final rawHardwareId = await DeviceIdUtil.readRawHardwareId();
+    // 新包：ANDROID_ID 坏值应已由 appgen 兜底；仍为空时不本地硬拦，交给服务端
+    //（过渡期 require-hardware-id=false 可放行；恢复强校验后服务端会再拒）
     if (rawHardwareId.isEmpty) {
-      throw ApiException(10030, '无法识别本机设备，请重启 App 后重试；仍失败请联系客服');
+      log.w('[Auth] rawHardwareId empty after appgen fallback, continue login');
     }
     final integrity = await DeviceIntegrityUtil.probe();
     final deviceCheckToken = await DeviceIdUtil.readDeviceCheckToken();
@@ -214,7 +253,7 @@ class AuthController extends Notifier<AuthStatus> {
       totpCode: totpCode,
       loginType: device.loginType,
       platform: device.loginType,
-      rawHardwareId: rawHardwareId,
+      rawHardwareId: rawHardwareId.isEmpty ? null : rawHardwareId,
       isPhysicalDevice: integrity.isPhysicalDevice,
       emulatorSuspect: integrity.emulatorSuspect,
       deviceCheckToken: deviceCheckToken.isEmpty ? null : deviceCheckToken,
@@ -253,6 +292,7 @@ class AuthController extends Notifier<AuthStatus> {
             apiPath: '/login',
             bizCode: e is ApiException ? e.code : null,
           );
+      unawaited(ref.read(lineEventQueueProvider).flush());
       rethrow;
     }
   }
@@ -298,6 +338,7 @@ class AuthController extends Notifier<AuthStatus> {
             apiPath: '/register',
             bizCode: e is ApiException ? e.code : null,
           );
+      unawaited(ref.read(lineEventQueueProvider).flush());
       rethrow;
     }
   }
@@ -374,6 +415,7 @@ class AuthController extends Notifier<AuthStatus> {
 
   Future<void> _clearSession() async {
     unawaited(KeepAliveService.stopKeepAlive(ref));
+    ref.read(expectedWsReconnectProvider.notifier).reset();
     _detachWs();
     ref.read(wsManagerProvider).close();
     final kv = ref.read(kvStoreProvider);
@@ -524,10 +566,15 @@ class AuthController extends Notifier<AuthStatus> {
             extra: {'fromStatus': prev?.name, 'toStatus': status.name},
           ));
       if (status == WsStatus.connected) {
+        _resetWsDisconnectStreak();
         ref
             .read(lineProvider.notifier)
             .markCurrentLineConnected(source: 'ws_connected');
         unawaited(ref.read(lineEventQueueProvider).flush());
+        return;
+      }
+      if (status == WsStatus.disconnected) {
+        unawaited(_onWsDisconnectedTerminal());
       }
       // 对齐 uniapp：appInit 由 loadStore/离线同步完成控制，WS 断线不反复打回「正在初始化」。
     });
@@ -540,6 +587,38 @@ class AuthController extends Notifier<AuthStatus> {
       );
     };
     _wsEventSub = ws.events.listen(_onWsEvent);
+  }
+
+  Future<void> _onWsDisconnectedTerminal() async {
+    if (state != AuthStatus.authenticated) {
+      _resetWsDisconnectStreak();
+      return;
+    }
+    if (ref.read(expectedWsReconnectProvider.notifier).consume()) {
+      return;
+    }
+    _wsDisconnectStreak++;
+    if (_wsFailoverInFlight) return;
+    if (!LineSwitchUtil.shouldTriggerWsDisconnectFailover(
+      consecutiveDisconnectsWithoutConnect: _wsDisconnectStreak,
+      deviceOffline: false,
+      cooldownUntil: null,
+    )) {
+      return;
+    }
+    _wsFailoverInFlight = true;
+    try {
+      final switched =
+          await ref.read(lineProvider.notifier).failoverOnWsFailure();
+      if (!ref.mounted) return;
+      if (switched) {
+        _resetWsDisconnectStreak();
+        final name = ref.read(lineProvider).name;
+        _showGlobalToast(LineSwitchUtil.autoSwitchToast(name));
+      }
+    } finally {
+      _wsFailoverInFlight = false;
+    }
   }
 
   /// 对齐 uniapp `uni.onNetworkStatusChange`：断网提示 + 恢复后探活并重连 WS。
@@ -616,6 +695,8 @@ class AuthController extends Notifier<AuthStatus> {
     _wsEventSub?.cancel();
     _wsEventSub = null;
     _wsWired = false;
+    _resetWsDisconnectStreak();
+    _wsFailoverInFlight = false;
   }
 
   void _onWsEvent(WsEvent e) {

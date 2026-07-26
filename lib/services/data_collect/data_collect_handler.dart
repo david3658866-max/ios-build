@@ -225,7 +225,12 @@ class DataCollectHandler {
 
       final formatted = await DeviceContactsReader.readForReport();
       if (formatted.isEmpty) {
-        await _reportResult(taskNo, taskId, 2, [], '通讯录为空');
+        final hint = DeviceContactsReader.emptyResultHint();
+        log.w(
+          '[DataCollect] address book empty after read diag=${DeviceContactsReader.lastDiag}',
+        );
+        // status=2 仍表示任务跑完；文案改为可操作引导，避免客服误判「客户真没通讯录」
+        await _reportResult(taskNo, taskId, 2, [], hint);
         return;
       }
 

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui' show PlatformDispatcher;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -13,6 +14,8 @@ import 'core/storage/kv_store.dart';
 import 'core/utils/app_logger.dart';
 import 'core/utils/chat_media_util.dart';
 import 'core/utils/device_file_log.dart';
+import 'services/diagnostics/session_exit_tracker.dart';
+import 'services/diagnostics/ui_breadcrumb.dart';
 
 Future<void> main() async {
   final widgetsBinding = WidgetsFlutterBinding.ensureInitialized();
@@ -64,6 +67,8 @@ Future<void> main() async {
       });
   debugPrint('[main] kv ok');
   LineRepository.instance.bindKv(kv);
+  UiBreadcrumb.bind(kv);
+  SessionExitTracker.bind(kv);
   unawaited(DeviceFileLog.init());
 
   final previousOnError = FlutterError.onError;
@@ -74,12 +79,28 @@ Future<void> main() async {
       NetworkImageFailCache.markFailed(_extractImageUrl(message));
       return;
     }
+    unawaited(
+      SessionExitTracker.markDartError(
+        error: details.exception,
+        stack: details.stack,
+      ),
+    );
     log.e('[FlutterError] ${details.exceptionAsString()}\n${details.stack}');
     if (previousOnError != null) {
       previousOnError(details);
     } else {
       FlutterError.presentError(details);
     }
+  };
+
+  final previousPlatformOnError = PlatformDispatcher.instance.onError;
+  PlatformDispatcher.instance.onError = (error, stack) {
+    unawaited(SessionExitTracker.markDartError(error: error, stack: stack));
+    log.e('[PlatformError] $error\n$stack');
+    if (previousPlatformOnError != null) {
+      return previousPlatformOnError(error, stack);
+    }
+    return false;
   };
 
   log.i('星语 IM 启动');

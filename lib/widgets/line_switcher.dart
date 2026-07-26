@@ -59,16 +59,27 @@ class _LineSwitcherState extends ConsumerState<LineSwitcher> {
     final failover = ref.watch(lineAutoFailoverProvider);
     final isAuthed =
         ref.watch(authControllerProvider) == AuthStatus.authenticated;
+    final messageDegraded = LineSwitchUtil.isMessageChannelDegraded(
+      isAuthenticated: isAuthed,
+      lineStatus: config.lineStatus,
+      wsStatus: config.wsStatus,
+    );
     final status = LineSwitchUtil.chipStatus(
       isAuthenticated: isAuthed,
       lineStatus: config.lineStatus,
       wsStatus: config.wsStatus,
     );
-    final (bg, border, statusText, statusColor, showSpinner) = _style(status);
+    final (bg, border, statusText, statusColor, showSpinner) =
+        messageDegraded ? _degradedStyle() : _style(status);
     final showRetry =
-        status == WsStatus.disconnected && !_retrying && !failover.active;
+        status == WsStatus.disconnected &&
+            !messageDegraded &&
+            !_retrying &&
+            !failover.active;
     final countdownSec =
-        status == WsStatus.disconnected && failover.active
+        status == WsStatus.disconnected &&
+                !messageDegraded &&
+                failover.active
             ? failover.secondsLeft
             : null;
 
@@ -124,11 +135,13 @@ class _LineSwitcherState extends ConsumerState<LineSwitcher> {
                 margin: EdgeInsets.only(right: rpx(context, 8)),
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: status == WsStatus.connected
-                      ? const Color(0xFF3E45D7)
-                      : (status == WsStatus.disconnected
-                          ? const Color(0xFFE43D33)
-                          : const Color(0xFF3E45D7)),
+                  color: messageDegraded
+                      ? const Color(0xFFF3A73F)
+                      : (status == WsStatus.connected
+                          ? const Color(0xFF3E45D7)
+                          : (status == WsStatus.disconnected
+                              ? const Color(0xFFE43D33)
+                              : const Color(0xFF3E45D7))),
                 ),
               ),
             Text(
@@ -193,11 +206,13 @@ class _LineSwitcherState extends ConsumerState<LineSwitcher> {
             Icon(
               Icons.keyboard_arrow_down,
               size: rpx(context, 24),
-              color: status == WsStatus.disconnected
-                  ? const Color(0xFFE43D33)
-                  : (showSpinner || _retrying
-                      ? const Color(0xFFF3A73F)
-                      : const Color(0xFF666666)),
+              color: messageDegraded
+                  ? const Color(0xFFC8872B)
+                  : (status == WsStatus.disconnected
+                      ? const Color(0xFFE43D33)
+                      : (showSpinner || _retrying
+                          ? const Color(0xFFF3A73F)
+                          : const Color(0xFF666666))),
             ),
           ],
         ),
@@ -205,6 +220,14 @@ class _LineSwitcherState extends ConsumerState<LineSwitcher> {
       ),
     );
   }
+
+  (Color, Color, String, Color, bool) _degradedStyle() => (
+        const Color(0xFFFFF8ED),
+        const Color(0x40F3A73F),
+        LineSwitchUtil.messageChannelDegradedLabel,
+        const Color(0xFFC8872B),
+        false,
+      );
 
   (Color, Color, String, Color, bool) _style(WsStatus status) {
     switch (status) {

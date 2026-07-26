@@ -8,6 +8,7 @@ import 'package:gal/gal.dart';
 
 import '../core/http/api_result.dart';
 import '../core/utils/chat_media_util.dart';
+import '../services/diagnostics/ui_breadcrumb.dart';
 import 'im_feedback.dart';
 
 /// 全屏预览图片。可选底部「保存到相册」。对齐 uniapp `uni.previewImage` + 保存。
@@ -55,6 +56,7 @@ class _ImagePreviewDialogState extends State<_ImagePreviewDialog> {
 
   Future<void> _saveToAlbum() async {
     if (_saving) return;
+    UiBreadcrumb.add('image_save_album');
     setState(() => _saving = true);
     try {
       final hasAccess = await Gal.hasAccess();

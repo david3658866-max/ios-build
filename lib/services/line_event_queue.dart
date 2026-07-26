@@ -52,6 +52,7 @@ class LineEventQueue {
     int? bizCode,
     String? wsStatus,
     Map<String, dynamic>? extra,
+    String? sessionIdOverride,
   }) async {
     try {
       final now = DateTime.now().millisecondsSinceEpoch;
@@ -77,7 +78,9 @@ class LineEventQueue {
 
       final event = <String, dynamic>{
         'eventId': _uuid.v4(),
-        'sessionId': await _sessionId(),
+        'sessionId': (sessionIdOverride != null && sessionIdOverride.isNotEmpty)
+            ? sessionIdOverride
+            : await _sessionId(),
         'installHash': await _installId(),
         'userId': kv.getLoginInfo()?.userId,
         'eventType': eventType,
@@ -108,6 +111,14 @@ class LineEventQueue {
     } catch (e) {
       log.w('[LineEvent] record ignored: $e');
     }
+  }
+
+  /// 每次冷启动轮换会话 ID，便于把「上次退出」与本轮启动对齐。
+  Future<String> beginNewSession() async {
+    final id = _uuid.v4();
+    await kv.set(StorageKeys.lineEventSessionId, id);
+    await kv.flush();
+    return id;
   }
 
   Future<void> flush() async {
@@ -198,10 +209,11 @@ class LineEventQueue {
     final ok = event['success'] == true;
     final ws = event['wsStatus']?.toString() ?? '';
     // 数字越大越保留。WS 终态必须高于过程噪声与探活成功。
+    if (type == 'session_exit') return 5;
     if (type == 'ws_state' && (ws == 'connected' || ws == 'disconnected')) {
       return 5;
     }
-    if (type == 'line_probe_round') return 4;
+    if (type == 'line_probe_round' || type == 'app_start') return 4;
     if (type == 'line_switch' || type == 'auth_result') return 3;
     if (!ok) return 2;
     if (ok && type == 'line_probe_result') return 0;
@@ -219,8 +231,10 @@ class LineEventQueue {
     }
   }
 
-  Future<void> _saveQueue(List<Map<String, dynamic>> rows) =>
-      kv.set(StorageKeys.lineEventQueue, jsonEncode(rows));
+  Future<void> _saveQueue(List<Map<String, dynamic>> rows) async {
+    await kv.set(StorageKeys.lineEventQueue, jsonEncode(rows));
+    await kv.flush();
+  }
 
   Future<String> _sessionId() async {
     final existing = kv.get<String>(StorageKeys.lineEventSessionId);

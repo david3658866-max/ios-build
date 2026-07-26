@@ -99,8 +99,9 @@ class LineRepository {
     return defaultLine;
   }
 
-  /// Pull remote config via current line. Returns true if list changed.
+  /// Pull remote config. Prefer [baseUrl] (absolute `…/api`) when current line is down.
   ///
+  /// Returns whether the server was reached (applied or notModified).
   /// [timeout] 默认 3s：探活前顺带拉配置，不能拖垮「连接中」体感。
   Future<bool> refreshFromRemote(
     Dio dio, {
@@ -109,8 +110,9 @@ class LineRepository {
   }) async {
     try {
       final env = kAppEnv == "test" ? "test" : "prod";
+      final path = _lineConfigPath(baseUrl);
       final res = await dio.get<dynamic>(
-        "/line/config",
+        path,
         queryParameters: {
           "env": env,
           "version": _configVersion,
@@ -132,7 +134,7 @@ class LineRepository {
       final version = (map["configVersion"] ?? "").toString();
       if (notModified) {
         log.i("[Line] remote config notModified version=$version");
-        return false;
+        return true;
       }
       final rawLines = map["lines"];
       if (rawLines is! List || rawLines.isEmpty) {
@@ -154,9 +156,6 @@ class LineRepository {
       if (lines.isEmpty) return false;
 
       final merged = mergeWithBuiltins(lines);
-      final changed = version != _configVersion ||
-          merged.length != _production.length ||
-          !_sameIds(merged, _production);
       _production = merged;
       if (version.isNotEmpty) {
         _configVersion = version;
@@ -170,13 +169,20 @@ class LineRepository {
       }
       log.i(
         "[Line] remote applied version=$_configVersion "
-        "lines=${merged.map((e) => e.id).join(",")}",
+        "lines=${merged.map((e) => e.id).join(",")}"
+        "${baseUrl != null ? ' via=$baseUrl' : ''}",
       );
-      return changed;
+      return true;
     } catch (e) {
       log.w("[Line] remote config fail: $e");
       return false;
     }
+  }
+
+  static String _lineConfigPath(String? baseUrl) {
+    if (baseUrl == null || baseUrl.trim().isEmpty) return "/line/config";
+    final root = baseUrl.trim().replaceAll(RegExp(r"/+$"), "");
+    return "$root/line/config";
   }
 
   /// Apply remote/cache lines as the authoritative enabled set.
@@ -234,18 +240,6 @@ class LineRepository {
       wsUrl: line.wsUrl,
       scanUrl: scan,
     );
-  }
-
-  bool _sameIds(List<LineConfig> a, List<LineConfig> b) {
-    if (a.length != b.length) return false;
-    for (var i = 0; i < a.length; i++) {
-      if (a[i].id != b[i].id ||
-          a[i].baseUrl != b[i].baseUrl ||
-          a[i].wsUrl != b[i].wsUrl) {
-        return false;
-      }
-    }
-    return true;
   }
 
   /// Accept both unwrapped `{configVersion,lines}` and wrapped `{code,data}`.

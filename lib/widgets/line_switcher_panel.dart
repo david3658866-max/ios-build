@@ -82,7 +82,10 @@ class _LineSwitcherPanelOverlayState
     try {
       final ok = await ref
           .read(lineProvider.notifier)
-          .checkCurrentLineStatus(allowFallback: true);
+          .checkCurrentLineStatus(
+            allowFallback: true,
+            exhaustiveProbe: true,
+          );
       if (!mounted) return;
       ImToast.show(
         context,

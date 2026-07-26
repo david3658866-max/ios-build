@@ -26,20 +26,20 @@ void main() {
     final remote = [
       const LineConfig(
         id: 'line1',
-        name: '主线路',
+        name: '线路1',
         label: 'main',
-        host: 'zenty.bgznp.com',
-        baseUrl: 'https://zenty.bgznp.com/api',
-        wsUrl: 'wss://zenty.bgznp.com/im',
+        host: 'zenty.scnjrm.com',
+        baseUrl: 'https://zenty.scnjrm.com/api',
+        wsUrl: 'wss://zenty.scnjrm.com/im',
         scanUrl: 'https://kavun.bgznp.com',
       ),
       const LineConfig(
         id: 'line3',
-        name: '备用线路2',
+        name: '线路3',
         label: 'bak2',
-        host: 'muvin.bgznp.com',
-        baseUrl: 'https://muvin.bgznp.com/api',
-        wsUrl: 'wss://muvin.bgznp.com/im',
+        host: 'forest.bgznp.com',
+        baseUrl: 'https://forest.bgznp.com/api',
+        wsUrl: 'wss://forest.bgznp.com/im',
         scanUrl: 'https://kavun.bgznp.com',
       ),
     ];

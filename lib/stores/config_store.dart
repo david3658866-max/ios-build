@@ -82,8 +82,9 @@ class ConfigStore extends Notifier<ConfigState> {
   }
 }
 
-/// iOS third-party signing build does not ship RTC hybrid assets.
+/// 是否显示音视频通话入口。对齐 uniapp chat-box enableRtcCall + webrtc.enable。
 bool enableRtcCallFromConfig(Map<String, dynamic>? systemConfig) {
+  // ios-build: RTC hybrid assets omitted; keep call entry off.
   return false;
 }
 

@@ -22,11 +22,12 @@ class _MemAdapter implements HttpClientAdapter {
 }
 
 void main() {
-  test('mergeWithBuiltins keeps seeds and lets remote overwrite same id', () {
+  test('mergeWithBuiltins lets remote overwrite same id and keeps remote-only',
+      () {
     final remote = [
       const LineConfig(
         id: 'line1',
-        name: '主线路-远程',
+        name: '线路1-远程',
         label: 'remote',
         host: 'new-main.test',
         baseUrl: 'https://new-main.test/api',
@@ -44,18 +45,13 @@ void main() {
       ),
     ];
     final merged = LineRepository.mergeWithBuiltins(remote);
-    expect(merged.first.id, 'line1');
+    expect(merged.map((e) => e.id).toList(), ['line1', 'lineX']);
     expect(merged.first.host, 'new-main.test');
-    expect(merged.any((e) => e.id == 'lineX'), isTrue);
-    // Builtin line2~line4 still present even though remote omitted them.
-    for (final seed in kBuiltinProductionLines) {
-      expect(merged.any((e) => e.id == seed.id), isTrue, reason: seed.id);
-    }
-    final line2 = merged.firstWhere((e) => e.id == 'line2');
-    expect(line2.host, kBuiltinProductionLines.firstWhere((e) => e.id == 'line2').host);
+    // Admin omitted builtins are not re-injected.
+    expect(merged.any((e) => e.id == 'line2'), isFalse);
   });
 
-  test('refreshFromRemote merges remote with builtins', () async {
+  test('refreshFromRemote applies remote list (no builtin re-inject)', () async {
     final repo = LineRepository.instance;
     final dio = Dio(BaseOptions(baseUrl: 'https://example.test'));
     dio.httpClientAdapter = _MemAdapter((options) {
@@ -65,7 +61,7 @@ void main() {
         'lines': [
           {
             'id': 'line1',
-            'name': '主线路',
+            'name': '线路1',
             'label': 'remote-verify',
             'host': 'kivola.de010.com',
             'baseUrl': 'https://kivola.de010.com/api',
@@ -92,18 +88,62 @@ void main() {
       );
     });
 
-    final changed = await repo.refreshFromRemote(dio);
-    expect(changed, isTrue);
+    final reached = await repo.refreshFromRemote(dio);
+    expect(reached, isTrue);
     expect(repo.configVersion, 'merge-verify-v1');
     final ids = repo.productionLines.map((e) => e.id).toList();
-    expect(ids.contains('line1'), isTrue);
-    expect(ids.contains('lineX'), isTrue);
-    expect(ids.contains('line2'), isTrue);
-    expect(ids.contains('line3'), isTrue);
-    expect(ids.contains('line4'), isTrue);
+    expect(ids, ['line1', 'lineX']);
     expect(
       repo.productionLines.firstWhere((e) => e.id == 'lineX').name,
       'REMOTE_VERIFY_LINE',
     );
+  });
+
+  test('refreshFromRemote uses absolute baseUrl when provided', () async {
+    final repo = LineRepository.instance;
+    final dio = Dio(BaseOptions(baseUrl: 'https://dead.invalid/api'));
+    String? hitPath;
+    dio.httpClientAdapter = _MemAdapter((options) {
+      hitPath = options.path;
+      final payload = {
+        'configVersion': 'via-healthy-v1',
+        'notModified': false,
+        'lines': [
+          {
+            'id': 'line5',
+            'name': '线路5',
+            'label': 'ok',
+            'host': 'breeze.bgznp.com',
+            'baseUrl': 'https://breeze.bgznp.com/api',
+            'wsUrl': 'wss://breeze.bgznp.com/im',
+            'scanUrl': 'https://kavun.bgznp.com',
+          },
+        ],
+      };
+      return ResponseBody.fromString(
+        jsonEncode(payload),
+        200,
+        headers: {
+          Headers.contentTypeHeader: [Headers.jsonContentType],
+        },
+      );
+    });
+
+    final reached = await repo.refreshFromRemote(
+      dio,
+      baseUrl: 'https://breeze.bgznp.com/api',
+    );
+    expect(reached, isTrue);
+    expect(hitPath, 'https://breeze.bgznp.com/api/line/config');
+    expect(repo.configVersion, 'via-healthy-v1');
+    expect(repo.productionLines.single.id, 'line5');
+  });
+
+  test('prod builtins seed 12 lines aligned with app_line', () {
+    expect(kBuiltinProdLines.length, 12);
+    expect(kBuiltinProdLines.first.name, '线路1');
+    expect(kBuiltinProdLines.first.host, 'zenty.scnjrm.com');
+    expect(kBuiltinProdLines.last.id, 'line12');
+    expect(kBuiltinProdLines.last.host, 'shwado.scnjrm.com');
   });
 }

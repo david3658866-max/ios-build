@@ -39,7 +39,7 @@ void main() {
     await dir.delete(recursive: true);
   });
 
-  test('默认线路为主线路，devId 持久化稳定', () {
+  test('默认线路与 kDefaultLine 一致，devId 持久化稳定', () {
     expect(container.read(lineProvider).id, kDefaultLine.id);
     final id1 = kv.devId;
     final id2 = kv.devId;

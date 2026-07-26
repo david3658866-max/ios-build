@@ -37,6 +37,50 @@ abstract final class LineSwitchUtil {
 
   static const retryProbeAllFailedToast = '仍无法连接，请检查网络后重试';
 
+  /// API 连接失败自动切线成功后的冷却，避免短时间反复跳线。
+  static const apiConnectionFailoverCooldown = Duration(seconds: 30);
+
+  /// 自动切线只采信近期探活，过期缓存不 adopt（避免切到早已不通的线）。
+  static const apiFailoverProbeMaxAge = Duration(minutes: 5);
+
+  /// 同一波 API 失败最多自动切线次数（再多只重试当前 baseUrl，不连跳）。
+  static const apiFailoverMaxSwitchesPerWave = 1;
+
+  /// WS 连续断开（本波未达 connected）达到此次数后自动切备用线。
+  static const wsDisconnectFailoverThreshold = 2;
+
+  /// WS 自动切线成功后的冷却，避免短时间反复跳线。
+  static const wsDisconnectFailoverCooldown = Duration(seconds: 60);
+
+  /// chip：已登录、HTTPS 探活通、但真实 WS 已断开。
+  static const messageChannelDegradedLabel = '消息异常';
+
+  /// 探活缓存是否仍可用于自动切线。
+  static bool isProbeFreshForApiFailover(
+    LineProbeCacheEntry entry, {
+    DateTime? now,
+    Duration maxAge = apiFailoverProbeMaxAge,
+  }) {
+    if (!entry.ok) return false;
+    final nowMs = (now ?? DateTime.now()).millisecondsSinceEpoch;
+    final age = nowMs - entry.checkedAtMs;
+    return age >= 0 && age <= maxAge.inMilliseconds;
+  }
+
+  /// 是否应跳过本次 API 连接失败自动切线（无网 / 冷却且非本波续切）。
+  static bool shouldSkipApiConnectionFailover({
+    required bool deviceOffline,
+    required bool hasTriedInWave,
+    required DateTime? cooldownUntil,
+    DateTime? now,
+  }) {
+    if (deviceOffline) return true;
+    if (hasTriedInWave) return false;
+    final until = cooldownUntil;
+    if (until == null) return false;
+    return (now ?? DateTime.now()).isBefore(until);
+  }
+
   /// 手切失败后倒计时自动切线。
   static const autoFailoverCountdownSeconds = 3;
 
@@ -60,13 +104,51 @@ abstract final class LineSwitchUtil {
     return '不通';
   }
 
-  /// 线路 chip 状态：对齐 uniapp line-switcher，始终看 HTTPS 探活（非真实 WS）。
+  /// 线路 chip 状态。
+  ///
+  /// - 未登录：只看 HTTPS 探活 [lineStatus]
+  /// - 已登录：探活不通/探活中仍看 [lineStatus]；探活通则反映真实 [wsStatus]
   static WsStatus chipStatus({
     required bool isAuthenticated,
     required WsStatus lineStatus,
     required WsStatus wsStatus,
+  }) {
+    if (!isAuthenticated) return lineStatus;
+    if (lineStatus == WsStatus.connecting ||
+        lineStatus == WsStatus.authing ||
+        lineStatus == WsStatus.disconnected) {
+      return lineStatus;
+    }
+    // HTTPS 探活已通：chip 跟真实 WS，避免「已通」掩盖消息通道挂掉。
+    return wsStatus;
+  }
+
+  /// 已登录 + HTTP 通 + WS 断 → chip 显示「消息异常」（非红字「连接失败」）。
+  static bool isMessageChannelDegraded({
+    required bool isAuthenticated,
+    required WsStatus lineStatus,
+    required WsStatus wsStatus,
   }) =>
-      lineStatus;
+      isAuthenticated &&
+      lineStatus == WsStatus.connected &&
+      wsStatus == WsStatus.disconnected;
+
+  /// 是否应触发 WS 连续断开自动切线。
+  static bool shouldTriggerWsDisconnectFailover({
+    required int consecutiveDisconnectsWithoutConnect,
+    required bool deviceOffline,
+    required DateTime? cooldownUntil,
+    int threshold = wsDisconnectFailoverThreshold,
+    DateTime? now,
+  }) {
+    if (deviceOffline) return false;
+    if (consecutiveDisconnectsWithoutConnect < threshold) return false;
+    final until = cooldownUntil;
+    if (until != null && (now ?? DateTime.now()).isBefore(until)) {
+      return false;
+    }
+    return true;
+  }
 
   /// 同线路再次选择且 WS 失败时，对齐 panel `afterLineSwitch` + `onLineSwitched`。
   static bool shouldReconnectSameLine({

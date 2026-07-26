@@ -27,6 +27,7 @@ import '../../core/utils/date_util.dart';
 import '../../core/utils/emotion_util.dart';
 import '../../core/utils/file_download_util.dart';
 import '../../core/utils/media_permission_util.dart';
+import '../../services/diagnostics/ui_breadcrumb.dart';
 import '../../core/utils/message_long_press_util.dart';
 import '../../core/utils/quote_message_util.dart';
 import '../../core/utils/rtc_call_util.dart';
@@ -1477,6 +1478,9 @@ class _ChatBoxPageState extends ConsumerState<ChatBoxPage> {
   }
 
   Future<void> _pickAndSendImage(ImageSource source) async {
+    UiBreadcrumb.add(
+      source == ImageSource.gallery ? 'chat_album' : 'chat_camera',
+    );
     if (source == ImageSource.gallery) {
       if (!mounted) return;
       final picks = await ChatImagePickerUtil.pickAlbumImages(
@@ -1550,6 +1554,7 @@ class _ChatBoxPageState extends ConsumerState<ChatBoxPage> {
   }
 
   Future<void> _pickAndSendVideo() async {
+    UiBreadcrumb.add('chat_video');
     final source = await showImBottomActionSheet<ImageSource>(
       context,
       items: const [
@@ -1614,6 +1619,7 @@ class _ChatBoxPageState extends ConsumerState<ChatBoxPage> {
   }
 
   Future<void> _pickAndSendFile() async {
+    UiBreadcrumb.add('chat_file');
     if (!mounted) return;
     if (!await MediaPermissionUtil.ensure(
       context,
@@ -1973,6 +1979,7 @@ class _ChatBoxPageState extends ConsumerState<ChatBoxPage> {
 
   Future<void> _toggleRecordMode() async {
     if (!_showRecord) {
+      UiBreadcrumb.add('chat_voice_mode');
       if (!mounted) return;
       if (!await MediaPermissionUtil.ensureScenario(
         context,
@@ -2533,6 +2540,7 @@ class _ChatBoxPageState extends ConsumerState<ChatBoxPage> {
   }
 
   Future<void> _onPrivateRtcCall(String mode) async {
+    UiBreadcrumb.add('rtc_call', detail: mode);
     if (_guardTeenager(TeenagerBlockFeature.rtcCall)) return;
     if (widget.chatType != ChatType.private) return;
 
@@ -2579,6 +2587,7 @@ class _ChatBoxPageState extends ConsumerState<ChatBoxPage> {
   }
 
   Future<void> _onGroupVideo() async {
+    UiBreadcrumb.add('rtc_call', detail: 'group_video');
     if (_guardTeenager(TeenagerBlockFeature.rtcCall)) return;
     if (widget.chatType != ChatType.group) return;
 

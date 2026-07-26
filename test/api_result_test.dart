@@ -21,5 +21,29 @@ void main() {
       );
       expect(isConnectionDioError(err), isTrue);
     });
+
+    test('isLineFailoverDioError 排除 receiveTimeout', () {
+      expect(
+        isLineFailoverDioError(DioException(
+          requestOptions: RequestOptions(path: '/x'),
+          type: DioExceptionType.connectionError,
+        )),
+        isTrue,
+      );
+      expect(
+        isLineFailoverDioError(DioException(
+          requestOptions: RequestOptions(path: '/x'),
+          type: DioExceptionType.receiveTimeout,
+        )),
+        isFalse,
+      );
+      expect(
+        isConnectionDioError(DioException(
+          requestOptions: RequestOptions(path: '/x'),
+          type: DioExceptionType.receiveTimeout,
+        )),
+        isTrue,
+      );
+    });
   });
 }

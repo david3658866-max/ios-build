@@ -46,86 +46,143 @@ class LineConfig {
 const String kLineStorageKey = 'app_line_id';
 
 const kAppEnv = String.fromEnvironment('APP_ENV', defaultValue: 'prod');
-const kLineConfigVersion = '2026-07-12-bgznp-v1';
+/// Bump when package builtin seeds change so cold clients re-pull /line/config.
+const kLineConfigVersion = '2026-07-25-bgznp-v2';
 
 const _prodH5Scan = 'https://kavun.bgznp.com';
 
-const List<LineConfig> kBuiltinProdLines = [
-  LineConfig(
+LineConfig _prodBuiltin({
+  required String id,
+  required String name,
+  required String label,
+  required String host,
+}) =>
+    LineConfig(
+      id: id,
+      name: name,
+      label: label,
+      host: host,
+      baseUrl: 'https://$host/api',
+      wsUrl: 'wss://$host/im',
+      scanUrl: _prodH5Scan,
+    );
+
+/// Cold-start seeds aligned with prod `app_line` (enabled). Remote /line/config wins.
+final List<LineConfig> kBuiltinProdLines = [
+  _prodBuiltin(
     id: 'line1',
-    name: '主线路',
+    name: '线路1',
     label: 'bgznp 主通道',
-    host: 'zenty.bgznp.com',
-    baseUrl: 'https://zenty.bgznp.com/api',
-    wsUrl: 'wss://zenty.bgznp.com/im',
-    scanUrl: _prodH5Scan,
+    host: 'zenty.scnjrm.com',
   ),
-  LineConfig(
+  _prodBuiltin(
     id: 'line2',
-    name: '备用线路1',
+    name: '线路2',
     label: 'bgznp 备用通道1',
-    host: 'castle.bgznp.com',
-    baseUrl: 'https://castle.bgznp.com/api',
-    wsUrl: 'wss://castle.bgznp.com/im',
-    scanUrl: _prodH5Scan,
+    host: 'castle.scnjrm.com',
   ),
-  LineConfig(
+  _prodBuiltin(
     id: 'line3',
-    name: '备用线路2',
+    name: '线路3',
     label: 'bgznp 备用通道2',
-    host: 'muvin.bgznp.com',
-    baseUrl: 'https://muvin.bgznp.com/api',
-    wsUrl: 'wss://muvin.bgznp.com/im',
-    scanUrl: _prodH5Scan,
+    host: 'forest.bgznp.com',
   ),
-  // App 备用3 = nuvor（config.prod.local backup3）；jovik 仅 Web 用户端。
-  LineConfig(
+  _prodBuiltin(
     id: 'line4',
-    name: '备用线路3',
+    name: '线路4',
     label: 'bgznp 备用通道3',
-    host: 'nuvor.bgznp.com',
-    baseUrl: 'https://nuvor.bgznp.com/api',
-    wsUrl: 'wss://nuvor.bgznp.com/im',
-    scanUrl: _prodH5Scan,
+    host: 'nuvor.scnjrm.com',
+  ),
+  _prodBuiltin(
+    id: 'line5',
+    name: '线路5',
+    label: 'bgznp 备用通道4',
+    host: 'breeze.bgznp.com',
+  ),
+  _prodBuiltin(
+    id: 'line6',
+    name: '线路6',
+    label: 'bgznp 备用通道4',
+    host: 'planet.scnjrm.com',
+  ),
+  _prodBuiltin(
+    id: 'line7',
+    name: '线路7',
+    label: 'bgznp 备用通道4',
+    host: 'bright.bgznp.com',
+  ),
+  _prodBuiltin(
+    id: 'line8',
+    name: '线路8',
+    label: 'bgznp 备用通道4',
+    host: 'muvin.bgznp.com',
+  ),
+  _prodBuiltin(
+    id: 'line9',
+    name: '线路9',
+    label: 'bgznp 备用通道4',
+    host: 'orange.scnjrm.com',
+  ),
+  _prodBuiltin(
+    id: 'line10',
+    name: '线路10',
+    label: 'bgznp 备用通道4',
+    host: 'silver.bgznp.com',
+  ),
+  _prodBuiltin(
+    id: 'line11',
+    name: '线路11',
+    label: 'scnjrm 线路11',
+    host: 'droagn.scnjrm.com',
+  ),
+  _prodBuiltin(
+    id: 'line12',
+    name: '线路12',
+    label: 'scnjrm 线路12',
+    host: 'shwado.scnjrm.com',
   ),
 ];
 
-const List<LineConfig> kBuiltinTestLines = [
-  LineConfig(
+LineConfig _testBuiltin({
+  required String id,
+  required String name,
+  required String label,
+  required String host,
+}) =>
+    LineConfig(
+      id: id,
+      name: name,
+      label: label,
+      host: host,
+      baseUrl: 'https://$host/api',
+      wsUrl: 'wss://$host/im',
+      scanUrl: 'https://novali.de010.com',
+    );
+
+final List<LineConfig> kBuiltinTestLines = [
+  _testBuiltin(
     id: 'line1',
-    name: '主线路',
+    name: '线路1',
     label: 'de010 主线路',
     host: 'kivola.de010.com',
-    baseUrl: 'https://kivola.de010.com/api',
-    wsUrl: 'wss://kivola.de010.com/im',
-    scanUrl: 'https://novali.de010.com',
   ),
-  LineConfig(
+  _testBuiltin(
     id: 'line2',
-    name: '备用线路1',
+    name: '线路2',
     label: 'de010 备用线路1',
     host: 'mexato.de010.com',
-    baseUrl: 'https://mexato.de010.com/api',
-    wsUrl: 'wss://mexato.de010.com/im',
-    scanUrl: 'https://novali.de010.com',
   ),
-  LineConfig(
+  _testBuiltin(
     id: 'line3',
-    name: '备用线路2',
+    name: '线路3',
     label: 'de010 备用线路2',
     host: 'roxani.de010.com',
-    baseUrl: 'https://roxani.de010.com/api',
-    wsUrl: 'wss://roxani.de010.com/im',
-    scanUrl: 'https://novali.de010.com',
   ),
-  LineConfig(
+  _testBuiltin(
     id: 'line4',
-    name: '备用线路3',
+    name: '线路4',
     label: 'de010 备用线路3',
     host: 'setura.de010.com',
-    baseUrl: 'https://setura.de010.com/api',
-    wsUrl: 'wss://setura.de010.com/im',
-    scanUrl: 'https://novali.de010.com',
   ),
 ];
 

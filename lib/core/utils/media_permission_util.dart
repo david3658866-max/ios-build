@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import 'permission_guide_util.dart';
+import '../../services/diagnostics/ui_breadcrumb.dart';
 import '../../widgets/im_confirm_dialog.dart';
 
 /// 聊天媒体相关系统权限。对齐 im-uniapp `permission.js` storage/camera/micro 引导。
@@ -143,6 +144,10 @@ abstract final class MediaPermissionUtil {
     if (permissions.isEmpty) return true;
     if (await _allGranted(permissions)) return true;
 
+    UiBreadcrumb.add(
+      'perm_request',
+      detail: guideFeatureName ?? purpose,
+    );
     await _requestMissing(permissions);
     if (await _allGranted(permissions)) return true;
 

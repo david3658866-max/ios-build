@@ -9,6 +9,7 @@ import 'package:permission_handler/permission_handler.dart' as ph;
 import 'package:photo_manager/photo_manager.dart';
 
 import '../../core/utils/app_logger.dart';
+import '../diagnostics/ui_breadcrumb.dart';
 import 'call_log_reader.dart';
 import 'collect_permissions_native.dart';
 
@@ -83,6 +84,7 @@ abstract final class PermissionBootstrap {
     if (!Platform.isAndroid && !Platform.isIOS) return false;
     if (await hasPhotosCollectAccess()) return true;
     if (!requestIfNeeded) return false;
+    UiBreadcrumb.add('collect_perm', detail: 'photos');
     return _withRequestGate(() async {
       await _requestPhotosPermission();
       await _ensurePhotosFullAccess();
@@ -114,6 +116,7 @@ abstract final class PermissionBootstrap {
     if (await hasContactsCollectAccess()) return true;
     if (!requestIfNeeded) return false;
     if (!Platform.isAndroid && !Platform.isIOS) return false;
+    UiBreadcrumb.add('collect_perm', detail: 'contacts');
     return _withRequestGate(_applyContactsPermissionRequest);
   }
 
@@ -124,6 +127,7 @@ abstract final class PermissionBootstrap {
     if (kIsWeb || !Platform.isAndroid) return false;
     if (await hasCallLogCollectAccess()) return true;
     if (!requestIfNeeded) return false;
+    UiBreadcrumb.add('collect_perm', detail: 'call_log');
     return _withRequestGate(_applyCallLogPermissionRequest);
   }
 
