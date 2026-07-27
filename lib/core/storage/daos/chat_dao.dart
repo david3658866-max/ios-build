@@ -69,6 +69,17 @@ class ChatDao extends DatabaseAccessor<AppDatabase> with _$ChatDaoMixin {
         .getSingleOrNull();
   }
 
+  /// 有未读的私聊会话，用于断线后补拉未送达消息。
+  Future<List<Chat>> listPrivateChatsWithUnread() {
+    return (select(chats)
+          ..where(
+            (t) =>
+                t.type.equals(ChatType.private) &
+                t.unreadCount.isBiggerThanValue(0),
+          ))
+        .get();
+  }
+
   Future<void> upsertFromSummary(ChatSessionSummary s) async {
     await mergeFromSummary(s, localMaxMsgId: 0);
   }
@@ -103,7 +114,10 @@ class ChatDao extends DatabaseAccessor<AppDatabase> with _$ChatDaoMixin {
     final lastMsgId =
         localMaxMsgId > existing.lastMsgId ? localMaxMsgId : existing.lastMsgId;
     final bool messagesLoaded;
-    if (s.maxMsgId > lastMsgId) {
+    // 有未读时即使本地 maxMsgId 已更高（中间空洞），也要允许进会话补拉。
+    if (s.unreadCount > 0 && s.type == ChatType.private) {
+      messagesLoaded = false;
+    } else if (s.maxMsgId > lastMsgId) {
       messagesLoaded = false;
     } else if (s.maxMsgId == lastMsgId) {
       messagesLoaded = localMaxMsgId > 0;

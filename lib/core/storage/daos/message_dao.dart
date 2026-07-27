@@ -173,14 +173,19 @@ class MessageDao extends DatabaseAccessor<AppDatabase> with _$MessageDaoMixin {
     required int chatTargetId,
     int? maxId,
   }) async {
+    // 发送成功后本地多为 pending；无 maxId 时禁止盲刷（未送达也会变已读）。
+    // 有 maxId（maxReadedId）时允许 pending/delivered → readed。
     await (update(messages)
           ..where((t) {
             var cond = t.chatType.equals(chatType) &
                 t.chatTargetId.equals(chatTargetId) &
-                t.selfSend.equals(true) &
-                t.status.isSmallerThanValue(MessageStatus.recall);
+                t.selfSend.equals(true);
             if (maxId != null) {
-              cond = cond & t.id.isSmallerOrEqualValue(maxId);
+              cond = cond &
+                  t.id.isSmallerOrEqualValue(maxId) &
+                  t.status.isIn([MessageStatus.pending, MessageStatus.delivered]);
+            } else {
+              cond = cond & t.status.equals(MessageStatus.delivered);
             }
             return cond;
           }))

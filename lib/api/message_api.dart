@@ -122,6 +122,13 @@ class MessageApi {
     return mapList(data, PrivateMessage.fromJson);
   }
 
+  /// 按会话拉未读私聊（PENDING/DELIVERED）。GET /message/private/loadUnreadByChat。
+  Future<List<PrivateMessage>> loadUnreadPrivateByChat(int friendId) async {
+    final data = await _c.get<dynamic>('/message/private/loadUnreadByChat',
+        query: {'friendId': friendId});
+    return mapList(data, PrivateMessage.fromJson);
+  }
+
   /// 私聊更早历史。GET /message/private/history。
   Future<List<PrivateMessage>> privateHistoryByChat(
     int friendId,

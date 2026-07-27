@@ -125,6 +125,49 @@ void main() {
       expect(LineSwitchUtil.messageChannelDegradedLabel, '消息异常');
     });
 
+    test('shouldShowSwitcherEntry 健康隐藏，异常/探活中展示', () {
+      expect(
+        LineSwitchUtil.shouldShowSwitcherEntry(
+          isAuthenticated: false,
+          lineStatus: WsStatus.connected,
+          wsStatus: WsStatus.disconnected,
+        ),
+        isFalse,
+      );
+      expect(
+        LineSwitchUtil.shouldShowSwitcherEntry(
+          isAuthenticated: true,
+          lineStatus: WsStatus.connected,
+          wsStatus: WsStatus.connected,
+        ),
+        isFalse,
+      );
+      expect(
+        LineSwitchUtil.shouldShowSwitcherEntry(
+          isAuthenticated: false,
+          lineStatus: WsStatus.disconnected,
+          wsStatus: WsStatus.disconnected,
+        ),
+        isTrue,
+      );
+      expect(
+        LineSwitchUtil.shouldShowSwitcherEntry(
+          isAuthenticated: false,
+          lineStatus: WsStatus.connecting,
+          wsStatus: WsStatus.disconnected,
+        ),
+        isTrue,
+      );
+      expect(
+        LineSwitchUtil.shouldShowSwitcherEntry(
+          isAuthenticated: true,
+          lineStatus: WsStatus.connected,
+          wsStatus: WsStatus.disconnected,
+        ),
+        isTrue,
+      );
+    });
+
     test('shouldTriggerWsDisconnectFailover 连续 2 次且未冷却', () {
       final now = DateTime.fromMillisecondsSinceEpoch(1_000_000);
       expect(

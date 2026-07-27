@@ -238,8 +238,9 @@ class _ChatBoxPageState extends ConsumerState<ChatBoxPage> {
 
   String get _chatSyncKey => '${widget.chatType}:${widget.targetId}';
 
-  bool _shouldThrottleOfflinePull() {
+  bool _shouldThrottleOfflinePull({int unreadCount = 0}) {
     if (widget.locateMessageId != null) return false;
+    if (unreadCount > 0) return false;
     final now = DateTime.now().millisecondsSinceEpoch;
     final last = _recentOfflinePullAtMs[_chatSyncKey];
     if (last != null &&
@@ -288,6 +289,9 @@ class _ChatBoxPageState extends ConsumerState<ChatBoxPage> {
       }
 
       final store = ref.read(chatStoreProvider);
+      final existingChat =
+          await store.findChat(widget.chatType, widget.targetId);
+      final unreadBefore = existingChat?.unreadCount ?? 0;
       if (widget.chatType == ChatType.private) {
         unawaited(store.activePrivateChat(widget.targetId));
         unawaited(store.syncPrivateReadStatus(widget.targetId));
@@ -299,7 +303,7 @@ class _ChatBoxPageState extends ConsumerState<ChatBoxPage> {
         await store.resetUnread(widget.chatType, widget.targetId);
       }
 
-      if (_shouldThrottleOfflinePull()) {
+      if (_shouldThrottleOfflinePull(unreadCount: unreadBefore)) {
         log.i(
           '[ChatBox] skip offline pull(throttled) '
           '${widget.chatType}/${widget.targetId}',

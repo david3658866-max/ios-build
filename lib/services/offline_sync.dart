@@ -62,9 +62,10 @@ class OfflineSync {
     notifier.setSyncing(key, syncing);
   }
 
-  /// WS 登录成功（cmd0）后调用：拉会话摘要 + 系统离线。
+  /// WS 登录成功（cmd0）后调用：拉会话摘要 + 未读补洞 + 系统离线。
   Future<void> pullAfterWsLogin() async {
     await pullSessionSummary();
+    await pullUnreadPrivateGaps();
     await pullSystemOffline();
   }
 
@@ -80,6 +81,47 @@ class OfflineSync {
     } catch (e, st) {
       log.w('[Offline] sessionSummary failed, fallback full pull: $e\n$st');
       await _pullFullOfflineMessages();
+    }
+  }
+
+  /// 对有未读的私聊补拉 PENDING/DELIVERED，避免 minId 增量跳过空洞。
+  Future<void> pullUnreadPrivateGaps() async {
+    try {
+      final db = ref.read(appDatabaseProvider);
+      final chats = await db.chatDao.listPrivateChatsWithUnread();
+      if (chats.isEmpty) return;
+      for (final chat in chats) {
+        await _pullUnreadPrivateByChat(chat.targetId);
+      }
+      log.i('[Offline] unread gaps pulled, chats=${chats.length}');
+    } catch (e, st) {
+      log.w('[Offline] pullUnreadPrivateGaps failed: $e\n$st');
+    }
+  }
+
+  Future<int> _pullUnreadPrivateByChat(int friendId) async {
+    try {
+      final msgs =
+          await ref.read(messageApiProvider).loadUnreadPrivateByChat(friendId);
+      if (msgs.isEmpty) return 0;
+      // 未读数已由 sessionSummary 写入，补洞入库不得再 incrementUnread，也不走 tip。
+      final chatStore = ref.read(chatStoreProvider);
+      for (final m in msgs) {
+        await chatStore.insertPrivate(m, incrementUnread: false);
+      }
+      final db = ref.read(appDatabaseProvider);
+      final maxId =
+          await db.messageDao.maxMessageId(ChatType.private, friendId);
+      if (maxId > 0) {
+        await db.chatDao.bumpLastMsgId(ChatType.private, friendId, maxId);
+      }
+      log.i(
+        '[Offline] unread byChat friend=$friendId count=${msgs.length} maxId=$maxId',
+      );
+      return msgs.length;
+    } catch (e, st) {
+      log.w('[Offline] unread byChat friend=$friendId failed: $e\n$st');
+      return 0;
     }
   }
 
@@ -153,7 +195,12 @@ class OfflineSync {
     final localCount =
         await db.messageDao.countMessages(chatType, targetId);
 
-    if (!force && chat.messagesLoaded && localCount > 0) {
+    if (!force && chat.messagesLoaded && localCount > 0 && chat.unreadCount <= 0) {
+      if (chatType == ChatType.private) {
+        // 角标已清仍可能有中间空洞，只补未读后返回。
+        await _pullUnreadPrivateByChat(targetId);
+        await ref.read(messageDispatcherProvider).flushBufferedMessages();
+      }
       log.i(
         '[Offline] chat offline skip loaded $chatType/$targetId count=$localCount',
       );
@@ -167,6 +214,8 @@ class OfflineSync {
     final refreshed = await chatStore.findChat(chatType, targetId);
     final dbMax = await db.messageDao.maxMessageId(chatType, targetId);
     final lastMsgId = refreshed?.lastMsgId ?? 0;
+    // 私聊始终先拉未读：进会话可能已清 unreadCount，但中间空洞仍需补齐。
+    final needUnread = chatType == ChatType.private;
 
     final dispatcher = ref.read(messageDispatcherProvider);
     final config = ref.read(configStoreProvider.notifier);
@@ -176,8 +225,18 @@ class OfflineSync {
     }
     _setChatSyncing(chatType, targetId, true);
     try {
+      if (needUnread) {
+        await _pullUnreadPrivateByChat(targetId);
+      }
+
       final batchSize = ChatMessageWindowConfig.initialPullSize;
       var minId = dbMax > lastMsgId ? dbMax : lastMsgId;
+      // 未读补洞后再读一次本地 max，避免仍用旧 cursor。
+      final afterUnreadMax =
+          await db.messageDao.maxMessageId(chatType, targetId);
+      if (afterUnreadMax > minId) {
+        minId = afterUnreadMax;
+      }
       var totalFetched = 0;
       var syncedToEnd = false;
       if (chatType == ChatType.private) {

@@ -14,6 +14,9 @@ import 'line_auto_failover_offer.dart';
 import 'line_switcher_panel.dart';
 
 /// 线路切换 chip。对应 im-uniapp line-switcher.vue。
+///
+/// 仅在当前线路异常 / 探活中时展示；连通且消息正常时隐藏。
+/// 展示同时仍依赖各页的自动探活 / 切线，不替代后台 failover。
 class LineSwitcher extends ConsumerStatefulWidget {
   const LineSwitcher({
     super.key,
@@ -59,6 +62,13 @@ class _LineSwitcherState extends ConsumerState<LineSwitcher> {
     final failover = ref.watch(lineAutoFailoverProvider);
     final isAuthed =
         ref.watch(authControllerProvider) == AuthStatus.authenticated;
+    if (!LineSwitchUtil.shouldShowSwitcherEntry(
+      isAuthenticated: isAuthed,
+      lineStatus: config.lineStatus,
+      wsStatus: config.wsStatus,
+    )) {
+      return const SizedBox.shrink();
+    }
     final messageDegraded = LineSwitchUtil.isMessageChannelDegraded(
       isAuthenticated: isAuthed,
       lineStatus: config.lineStatus,

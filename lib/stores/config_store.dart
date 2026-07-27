@@ -84,7 +84,25 @@ class ConfigStore extends Notifier<ConfigState> {
 
 /// 是否显示音视频通话入口。对齐 uniapp chat-box enableRtcCall + webrtc.enable。
 bool enableRtcCallFromConfig(Map<String, dynamic>? systemConfig) {
-  // ios-build: RTC hybrid assets omitted; keep call entry off.
+  bool parse(dynamic value, {required bool defaultValue}) {
+    if (value is bool) return value;
+    if (value is num) return value != 0;
+    if (value is String) {
+      final s = value.toLowerCase();
+      if (s == 'true' || s == '1') return true;
+      if (s == 'false' || s == '0') return false;
+    }
+    return defaultValue;
+  }
+
+  final direct = systemConfig?['enableRtcCall'];
+  if (direct != null) return parse(direct, defaultValue: false);
+
+  final webrtc = systemConfig?['webrtc'];
+  if (webrtc is Map) {
+    final enable = webrtc['enable'];
+    if (enable != null) return parse(enable, defaultValue: false);
+  }
   return false;
 }
 

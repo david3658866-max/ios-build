@@ -6,7 +6,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/di/app_providers.dart';
 import '../core/enums/chat_type.dart';
 import '../core/enums/cmd_type.dart';
-import '../core/enums/message_status.dart';
 import '../core/enums/message_type.dart';
 import '../core/utils/group_permission_util.dart';
 import '../core/ws/ws_event.dart';
@@ -132,7 +131,8 @@ class MessageDispatcher {
         await chat.resetUnread(ChatType.private, friendId);
         return;
       case MessageType.receipt:
-        await chat.readedPrivate(friendId: msg.sendId);
+        // 必须带 maxReadedId，避免未送达消息被盲标已读
+        await chat.syncPrivateReadStatus(msg.sendId);
         return;
       case MessageType.recall:
         await chat.recallPrivate(msg);
@@ -287,7 +287,7 @@ class MessageDispatcher {
     }
     if (msg.type == MessageType.userBanned) {
       await ref.read(authControllerProvider.notifier).forceExit(
-            '您的账号已被管理员封禁，原因:' + (msg.content ?? ''),
+            '您的账号已被管理员封禁，原因:${msg.content ?? ''}',
           );
       return;
     }

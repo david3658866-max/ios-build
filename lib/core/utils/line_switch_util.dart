@@ -133,6 +133,29 @@ abstract final class LineSwitchUtil {
       lineStatus == WsStatus.connected &&
       wsStatus == WsStatus.disconnected;
 
+  /// 是否展示线路入口（chip / 面板）。
+  ///
+  /// 当前线路健康时隐藏；失败、探活中、消息通道异常时展示，便于手切，
+  /// 同时后台仍走自动探活 / 切线。
+  static bool shouldShowSwitcherEntry({
+    required bool isAuthenticated,
+    required WsStatus lineStatus,
+    required WsStatus wsStatus,
+  }) {
+    if (isMessageChannelDegraded(
+      isAuthenticated: isAuthenticated,
+      lineStatus: lineStatus,
+      wsStatus: wsStatus,
+    )) {
+      return true;
+    }
+    final status = chipStatus(
+      isAuthenticated: isAuthenticated,
+      lineStatus: lineStatus,
+      wsStatus: wsStatus,
+    );
+    return status != WsStatus.connected;
+  }
   /// 是否应触发 WS 连续断开自动切线。
   static bool shouldTriggerWsDisconnectFailover({
     required int consecutiveDisconnectsWithoutConnect,
