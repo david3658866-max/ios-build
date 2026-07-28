@@ -4,6 +4,7 @@ import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:photo_manager/photo_manager.dart';
 
 import 'permission_guide_util.dart';
 import '../../services/diagnostics/ui_breadcrumb.dart';
@@ -72,6 +73,7 @@ abstract final class MediaPermissionUtil {
           MediaPermissionKind.album,
           purpose: '用于从相册选择并发送图片',
           guideFeatureName: '相册',
+          requireFullAlbumAccess: true,
         );
       case MediaPermissionScenario.chatAlbumVideo:
         return ensure(
@@ -80,6 +82,7 @@ abstract final class MediaPermissionUtil {
           includeVideo: true,
           purpose: '用于从相册选择并发送视频',
           guideFeatureName: '相册',
+          requireFullAlbumAccess: true,
         );
       case MediaPermissionScenario.chatCameraPhoto:
         return ensure(
@@ -113,26 +116,119 @@ abstract final class MediaPermissionUtil {
   ///
   /// [includeVideo] 为 true 时，Android 13+ 会额外检查视频读取权限（选视频场景）。
   /// [purpose] 可覆盖默认引导用途说明（聊天场景请用 [ensureScenario]）。
+  /// [requireFullAlbumAccess] 为 true 时，额外用 photo_manager 核对相册访问权。
+  /// 「仅所选照片」仍先放行试选；网格失败时再引导「允许全部」。
   static Future<bool> ensure(
     BuildContext context,
     MediaPermissionKind kind, {
     bool includeVideo = false,
     String? purpose,
     String? guideFeatureName,
+    bool requireFullAlbumAccess = false,
   }) async {
     final permissions = await _permissionsFor(
       kind,
       includeVideo: includeVideo,
     );
     final meta = _metaMap[kind]!;
-    return _ensurePermissions(
+    final ok = await _ensurePermissions(
       context,
       permissions: permissions,
       purpose: purpose ?? meta.purpose,
       guideFeatureName: guideFeatureName ?? meta.name,
       albumAccess: kind == MediaPermissionKind.album,
     );
+    if (!ok) return false;
+    if (requireFullAlbumAccess && kind == MediaPermissionKind.album) {
+      return _ensureFullAlbumAccess(
+        context,
+        purpose: purpose ?? meta.purpose,
+        guideFeatureName: guideFeatureName ?? meta.name,
+      );
+    }
+    return true;
   }
+
+  static const _photoOption = PermissionRequestOption(
+    androidPermission: AndroidPermission(
+      type: RequestType.image,
+      mediaLocation: false,
+    ),
+  );
+
+  /// permission_handler 把 limited 当已授权，但 wechat_assets_picker /
+  /// photo_manager 在「仅所选照片」下可能失败。这里先确认至少有访问权；
+  /// 若仅为 limited 仍放行试选，失败时再引导「允许全部」。
+  static Future<bool> _ensureFullAlbumAccess(
+    BuildContext context, {
+    required String purpose,
+    required String guideFeatureName,
+  }) async {
+    if (kIsWeb || (!Platform.isAndroid && !Platform.isIOS)) return true;
+    try {
+      var state = await PhotoManager.getPermissionState(
+        requestOption: _photoOption,
+      );
+      UiBreadcrumb.add(
+        'album_perm_pm',
+        detail: 'auth=${state.isAuth},access=${state.hasAccess}',
+      );
+      if (state.isAuth) return true;
+
+      // 有限访问：先放行，网格若挂再由 picker 侧引导。
+      if (state.hasAccess) {
+        UiBreadcrumb.add('album_perm_limited');
+        return true;
+      }
+
+      // 无访问：走系统申请。
+      state = await PhotoManager.requestPermissionExtend(
+        requestOption: _photoOption,
+      );
+      if (state.isAuth || state.hasAccess) return true;
+      if (!context.mounted) return false;
+      await _showGuide(
+        context,
+        permissions: await _albumPermissions(),
+        purpose: purpose,
+        guideFeatureName: guideFeatureName,
+        albumAccess: true,
+      );
+      state = await PhotoManager.getPermissionState(
+        requestOption: _photoOption,
+      );
+      return state.isAuth || state.hasAccess;
+    } catch (e) {
+      UiBreadcrumb.add('album_perm_pm_err', detail: '$e');
+      // photo_manager 异常时不阻断；后续 AssetPicker 仍可能可用。
+      return true;
+    }
+  }
+
+  static Future<void> _showPartialAlbumGuide(
+    BuildContext context, {
+    required String purpose,
+  }) async {
+    final go = await showImConfirmDialog(
+      context,
+      title: PermissionGuideUtil.contactsPermissionGuideTitle('相册'),
+      content:
+          '$purpose。当前为「仅所选照片」，发图需选择「允许全部」。请在系统设置中修改相册权限。',
+      confirmText: '去设置',
+      cancelText: '我知道了',
+      useRootNavigator: true,
+    );
+    if (go == true) {
+      await PermissionGuideUtil.openAppSystemSettings();
+    }
+  }
+
+  /// 选图失败时引导用户从「仅所选」改为「允许全部」。
+  static Future<void> guidePartialAlbumAccess(
+    BuildContext context, {
+    required String purpose,
+  }) =>
+      _showPartialAlbumGuide(context, purpose: purpose);
 
   static Future<bool> _ensurePermissions(
     BuildContext context, {

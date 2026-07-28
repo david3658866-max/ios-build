@@ -18,6 +18,7 @@ import '../../core/http/api_result.dart';
 import '../../core/storage/app_database.dart' hide Group, Friend;
 import '../../core/utils/chat_file_picker_util.dart';
 import '../../core/utils/chat_image_picker_util.dart';
+import '../../core/utils/chat_image_prepare_util.dart';
 import '../../core/utils/chat_media_util.dart';
 import '../../core/utils/chat_message_window_util.dart';
 import '../../core/utils/app_logger.dart';
@@ -1525,36 +1526,57 @@ class _ChatBoxPageState extends ConsumerState<ChatBoxPage> {
     int? width,
     int? height,
   }) async {
-    final file = File(path);
-    final bytes = await file.length();
-    if (bytes > ChatMediaUtil.maxImageBytes) {
-      if (mounted) {
-        _toast('图片大小不得大于10M');
+    try {
+      // HEIC 等格式服务端不认；超 10MB 也在此压到可传范围。
+      final prepared = await ChatImagePrepareUtil.prepareForUpload(
+        path,
+        width: width,
+        height: height,
+      );
+      if (prepared == null) {
+        if (mounted) {
+          _toast('图片处理失败，请换一张再试');
+        }
+        return;
       }
-      return;
-    }
+      if (prepared.bytes > ChatMediaUtil.maxImageBytes) {
+        if (mounted) {
+          _toast('图片大小不得大于10M');
+        }
+        return;
+      }
 
-    await _sendMedia(({bool receipt = false}) async {
-      final store = ref.read(chatStoreProvider);
-      if (widget.chatType == ChatType.private) {
-        return store.sendPrivateImage(
-          friendId: widget.targetId,
-          localPath: path,
-          width: width,
-          height: height,
-        );
+      final sendPath = prepared.path;
+      final sendWidth = prepared.width;
+      final sendHeight = prepared.height;
+
+      await _sendMedia(({bool receipt = false}) async {
+        final store = ref.read(chatStoreProvider);
+        if (widget.chatType == ChatType.private) {
+          return store.sendPrivateImage(
+            friendId: widget.targetId,
+            localPath: sendPath,
+            width: sendWidth,
+            height: sendHeight,
+          );
+        }
+        if (widget.chatType == ChatType.group) {
+          return store.sendGroupImage(
+            groupId: widget.targetId,
+            localPath: sendPath,
+            width: sendWidth,
+            height: sendHeight,
+            receipt: receipt,
+          );
+        }
+        return null;
+      });
+    } catch (e, st) {
+      log.w('[ChatBox] sendImageFromPath failed path=$path err=$e\n$st');
+      if (mounted) {
+        _toast('图片发送失败，请重试');
       }
-      if (widget.chatType == ChatType.group) {
-        return store.sendGroupImage(
-          groupId: widget.targetId,
-          localPath: path,
-          width: width,
-          height: height,
-          receipt: receipt,
-        );
-      }
-      return null;
-    });
+    }
   }
 
   Future<void> _pickAndSendVideo() async {

@@ -9,6 +9,9 @@
         android:name="android.permission.READ_MEDIA_IMAGES"/>
     <uses-permission
         android:name="android.permission.READ_MEDIA_VIDEO"/>
+    <!-- Android 14+ 仅所选照片；声明后可正确识别 limited 并引导允许全部 -->
+    <uses-permission
+        android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED"/>
     <uses-permission
         android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32"/>

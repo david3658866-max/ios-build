@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:wechat_assets_picker/wechat_assets_picker.dart';
 
+import '../../services/diagnostics/ui_breadcrumb.dart';
 import '../../theme/im_colors.dart';
 import 'chat_media_util.dart';
 import 'media_permission_util.dart';
@@ -26,6 +27,7 @@ abstract final class ChatImagePickerUtil {
     if (!context.mounted) return const [];
 
     // photo_manager 拒绝后往往不再弹系统框；先走 permission_handler 可重复申请。
+    // 「仅所选照片」下网格可能失败，失败时再引导「允许全部」。
     if (!await MediaPermissionUtil.ensureScenario(
       context,
       MediaPermissionScenario.chatAlbumImage,
@@ -50,26 +52,34 @@ abstract final class ChatImagePickerUtil {
         ),
       );
     } on StateError {
-      // permission_handler 与 photo_manager 状态不一致时补一次引导。
+      // permission_handler 与 photo_manager 状态不一致 / 仅所选照片时补引导。
+      UiBreadcrumb.add('album_pick_state_error');
       if (context.mounted) {
-        await MediaPermissionUtil.ensureScenario(
+        await MediaPermissionUtil.guidePartialAlbumAccess(
           context,
-          MediaPermissionScenario.chatAlbumImage,
+          purpose: '用于从相册选择并发送图片',
         );
       }
-      onToast?.call('未获得相册权限');
+      onToast?.call('未获得相册权限，请在设置中选择「允许全部」照片');
       return const [];
     } catch (e) {
+      UiBreadcrumb.add('album_pick_fail', detail: '$e');
       onToast?.call('打开相册失败');
       return const [];
     }
-    if (picked == null || picked.isEmpty) return const [];
+    if (picked == null || picked.isEmpty) {
+      UiBreadcrumb.add('album_pick_cancel');
+      return const [];
+    }
 
+    UiBreadcrumb.add('album_pick_result', detail: 'count=${picked.length}');
     final images = <ChatPickedImage>[];
+    var nullOrigin = 0;
     for (final asset in picked) {
       // 仅原图，对齐 uniapp sizeType: ['original']。
       final file = await asset.originFile;
       if (file == null) {
+        nullOrigin++;
         onToast?.call('无法读取原图: ${asset.title}');
         continue;
       }
@@ -80,6 +90,12 @@ abstract final class ChatImagePickerUtil {
           height: asset.height,
         ),
       );
+    }
+    if (nullOrigin > 0) {
+      UiBreadcrumb.add('album_origin_null', detail: 'n=$nullOrigin');
+    }
+    if (images.isEmpty && picked.isNotEmpty) {
+      onToast?.call('无法读取所选图片，请重试或换一张');
     }
     return images;
   }

@@ -3,6 +3,7 @@ import 'package:dio/dio.dart';
 import 'package:path/path.dart' as p;
 
 import '../core/http/dio_client.dart';
+import '../core/utils/chat_image_prepare_util.dart';
 import '../models/upload_file.dart';
 import '../models/upload_image.dart';
 import '../models/upload_video.dart';
@@ -20,8 +21,13 @@ class FileApi {
     bool isPermanent = false,
     int thumbSize = 50,
   }) async {
+    // 强制带服务端可识别扩展名，避免 HEIC/无扩展名被 FileUtil.isImage 拒绝。
+    final base = p.basename(filePath);
+    final filename = ChatImagePrepareUtil.isServerAcceptedFileName(base)
+        ? base
+        : 'chat_${DateTime.now().millisecondsSinceEpoch}.jpg';
     final form = FormData.fromMap({
-      'file': await MultipartFile.fromFile(filePath),
+      'file': await MultipartFile.fromFile(filePath, filename: filename),
     });
     // FormData 须让 Dio 自动带 boundary；同时拉长 sendTimeout 适配大图。
     final data = await _c.post<Map<String, dynamic>>(

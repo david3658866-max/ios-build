@@ -139,11 +139,12 @@ void main() {
     expect(repo.productionLines.single.id, 'line5');
   });
 
-  test('prod builtins seed 12 lines aligned with app_line', () {
-    expect(kBuiltinProdLines.length, 12);
+  test('prod builtins seed 44 lines aligned with app_line', () {
+    expect(kBuiltinProdLines.length, 44);
     expect(kBuiltinProdLines.first.name, '线路1');
-    expect(kBuiltinProdLines.first.host, 'zenty.scnjrm.com');
-    expect(kBuiltinProdLines.last.id, 'line12');
-    expect(kBuiltinProdLines.last.host, 'shwado.scnjrm.com');
+    expect(kBuiltinProdLines.first.host, 'zenty.dvdda.com');
+    expect(kBuiltinProdLines.last.id, 'line44');
+    expect(kBuiltinProdLines.last.host, 'velox.scnjrm.com');
+    expect(kLineConfigVersion, '2026-07-28-prod-44');
   });
 }
