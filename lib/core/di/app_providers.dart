@@ -66,6 +66,10 @@ final expectedWsReconnectProvider =
 class LineNotifier extends Notifier<LineConfig> {
   Future<bool>? _lineCheckFuture;
 
+  /// 最近一次登录/启动快速探路结果（供登录页复用，避免闪屏后再探一遍）。
+  bool _lastAuthWarmupOk = false;
+  DateTime? _lastAuthWarmupAt;
+
   /// 探活世代：手切 / 自动切线时递增，作废仍在飞的后台探活，避免把 chip 重新打成「连接中」。
   int _probeEpoch = 0;
 
@@ -143,6 +147,12 @@ class LineNotifier extends Notifier<LineConfig> {
     if (still) {
       // 同 id 可能换了 host：刷新 state
       state = lineById(currentId);
+      return true;
+    }
+    // 当前落在未下发的内置种子且仍通：暂留作桥接，避免立刻踢回可能也挂的默认线。
+    final bridgeProbe = ref.read(lineProbeCacheProvider)[currentId];
+    if (LineSwitchUtil.shouldKeepSeedBridgeLine(probe: bridgeProbe)) {
+      log.i('[Line] keep seed bridge $currentId after remote prune');
       return true;
     }
     final next = LineRepository.instance.defaultLine;
@@ -525,7 +535,7 @@ class LineNotifier extends Notifier<LineConfig> {
     if (fromLast != null && usable(fromLast.id)) return fromLast;
 
     final healthy = <({LineConfig line, int ms})>[];
-    for (final line in kVisibleLines) {
+    for (final line in LineRepository.instance.probeCandidateLines) {
       if (tried.contains(line.id)) continue;
       final entry = cache[line.id];
       if (entry == null || !entry.ok) continue;
@@ -609,31 +619,73 @@ class LineNotifier extends Notifier<LineConfig> {
         );
   }
 
+  /// 冷启动闪屏阶段预探登录线路（与登录页共用 [checkCurrentLineStatus]）。
+  Future<bool> warmupAuthLines() =>
+      checkCurrentLineStatus(allowFallback: true);
+
   /// 探测线路并更新 chip。
   ///
-  /// [allowFallback]=true（登录/注册页）：并发探活全部线上线路；
+  /// [allowFallback]=true（登录/注册页 / 启动预探）：并发探活线上线路；
   /// 当前线通则保留，否则自动切到延迟最低的可用线。
   /// Debug 本机线路优先探本地；本地不通时再探线上（方便真机无 adb 时验证）。
   /// [exhaustiveProbe]=true：全量探完每条（面板「重新检测」）；默认分批截断。
+  /// 启动预探已成功时，短时间内直接复用，避免登录页再等一轮。
   Future<bool> checkCurrentLineStatus({
     bool allowFallback = false,
     bool exhaustiveProbe = false,
   }) {
-    return _lineCheckFuture ??= () async {
-      await refreshRemoteLineConfig();
-      if (!allowFallback) {
-        return _probeLineWithStatus(state);
+    if (allowFallback &&
+        !exhaustiveProbe &&
+        LineSwitchUtil.shouldReuseAuthWarmup(
+          lastOk: _lastAuthWarmupOk,
+          completedAt: _lastAuthWarmupAt,
+          hasHealthyLines: lastHealthyLines.isNotEmpty,
+        )) {
+      if (ref.mounted) {
+        ref
+            .read(configStoreProvider.notifier)
+            .setLineStatus(WsStatus.connected);
       }
-      if (kDebugMode && state.id == kLocalDevLine.id) {
-        final localOk = await _probeLineWithStatus(
-          state,
-          triggerSource: 'auth_local_first',
-        );
-        if (localOk) return true;
-        log.i('[Line] local unavailable, fallback to probeAll remotes');
+      log.i('[Line] reuse startup auth warmup');
+      return Future<bool>.value(true);
+    }
+
+    // 已有探活在飞：直接复用同一 Future（启动预探 + 登录页合流）。
+    final inflight = _lineCheckFuture;
+    if (inflight != null) return inflight;
+
+    final capturedAllowFallback = allowFallback;
+    final capturedExhaustive = exhaustiveProbe;
+    return _lineCheckFuture = () async {
+      try {
+        if (!capturedAllowFallback) {
+          await refreshRemoteLineConfig();
+          return _probeLineWithStatus(state);
+        }
+        // 登录/注册/启动预探：先探通再拉配置。默认线 DNS 挂时 refresh 会白白堵数秒。
+        if (kDebugMode && state.id == kLocalDevLine.id) {
+          final localOk = await _probeLineWithStatus(
+            state,
+            triggerSource: 'auth_local_first',
+          );
+          if (localOk) {
+            _lastAuthWarmupOk = true;
+            _lastAuthWarmupAt = DateTime.now();
+            return true;
+          }
+          log.i('[Line] local unavailable, fallback to probeAll remotes');
+        }
+        final ok =
+            await _probeAllAndSelectBest(exhaustive: capturedExhaustive);
+        if (capturedAllowFallback && !capturedExhaustive) {
+          _lastAuthWarmupOk = ok;
+          _lastAuthWarmupAt = DateTime.now();
+        }
+        return ok;
+      } finally {
+        _lineCheckFuture = null;
       }
-      return _probeAllAndSelectBest(exhaustive: exhaustiveProbe);
-    }().whenComplete(() => _lineCheckFuture = null);
+    }();
   }
 
   /// 并发探活刷新 [lastHealthyLines] 与探活缓存；不改当前线路、不改 chip 状态。
@@ -641,23 +693,41 @@ class LineNotifier extends Notifier<LineConfig> {
   ///
   /// [exhaustive]=false：健康优先分批（每批 5、满 5 通停）；
   /// [exhaustive]=true：全量并发（面板重新检测）。
+  /// [fastAuth]=true：登录页首次探活（通 1 条即停、短超时）。
   Future<void> refreshHealthyLines({
     String triggerSource = 'autofailover_probe',
     bool exhaustive = false,
+    bool fastAuth = false,
   }) async {
     if (!ref.mounted) return;
+    // 串行化批量探活：后台补探与发码 failover / 面板重检不要互相丢弃。
+    while (_batchProbeBusy) {
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      if (!ref.mounted) return;
+    }
     _batchProbeBusy = true;
     try {
-      final configReached = await refreshRemoteLineConfig();
+      // 登录快速探：跳过前置拉配置；通线后再用绝对 baseUrl 补拉。
+      final configReached =
+          fastAuth ? false : await refreshRemoteLineConfig();
       if (!ref.mounted) return;
       final manager = ref.read(lineManagerProvider);
       final prior = ref.read(lineProbeCacheProvider);
+      // 面板全量重检只打可见/启用表；日常与登录探活用启用∪400+种子。
+      final probeLines = exhaustive
+          ? kVisibleLines
+          : LineRepository.instance.probeCandidateLines;
       final results = exhaustive
-          ? await manager.probeAll(lines: kLines)
-          : await manager.probeAllBatched(
-              lines: kLines,
-              priorHealth: prior,
-            );
+          ? await manager.probeAll(lines: probeLines)
+          : fastAuth
+              ? await manager.probeAllBatchedForAuth(
+                  lines: probeLines,
+                  priorHealth: prior,
+                )
+              : await manager.probeAllBatched(
+                  lines: probeLines,
+                  priorHealth: prior,
+                );
       if (!ref.mounted) return;
 
       final healthy = <({LineConfig line, int ms})>[];
@@ -686,7 +756,30 @@ class LineNotifier extends Notifier<LineConfig> {
         ref.read(lineProbeCacheProvider.notifier).upsertAll(cacheUpdates);
       }
       healthy.sort((a, b) => a.ms.compareTo(b.ms));
-      lastHealthyLines = healthy.map((e) => e.line).toList(growable: false);
+      if (lastHealthyLines.isNotEmpty &&
+          (fastAuth || triggerSource == 'auth_probe_topup')) {
+        // 快速探 / 后台补探：与已有通线合并；本轮已探失败的要从候选里摘掉。
+        final byId = <String, ({LineConfig line, int ms})>{
+          for (final h in lastHealthyLines)
+            h.id: (
+              line: h,
+              ms: ref.read(lineProbeCacheProvider)[h.id]?.latencyMs ?? 1 << 30,
+            ),
+        };
+        for (final r in results) {
+          final ms = r.outcome.latencyMs;
+          if (r.outcome.ok && ms != null) {
+            byId[r.line.id] = (line: r.line, ms: ms);
+          } else {
+            byId.remove(r.line.id);
+          }
+        }
+        final merged = byId.values.toList()
+          ..sort((a, b) => a.ms.compareTo(b.ms));
+        lastHealthyLines = merged.map((e) => e.line).toList(growable: false);
+      } else {
+        lastHealthyLines = healthy.map((e) => e.line).toList(growable: false);
+      }
       // 当前线拉配置失败时：任意探通线都可补拉完整线路表。
       if (!configReached && lastHealthyLines.isNotEmpty) {
         await _refreshRemoteConfigFromHealthy(lastHealthyLines);
@@ -755,7 +848,7 @@ class LineNotifier extends Notifier<LineConfig> {
       final manager = ref.read(lineManagerProvider);
       final prior = ref.read(lineProbeCacheProvider);
       final results = await manager.probeAllBatched(
-        lines: kLines,
+        lines: LineRepository.instance.probeCandidateLines,
         priorHealth: prior,
         maxBatches: 1,
       );
@@ -878,6 +971,8 @@ class LineNotifier extends Notifier<LineConfig> {
     await refreshHealthyLines(
       triggerSource: 'auth_probe_all',
       exhaustive: exhaustive,
+      // 全量重检仍探完；日常登录通 1 条即切，缩短等待。
+      fastAuth: !exhaustive,
     );
     if (!ref.mounted) return false;
     if (epoch != _probeEpoch) {
@@ -896,8 +991,14 @@ class LineNotifier extends Notifier<LineConfig> {
       return false;
     }
 
-    final currentOk = healthy.any((e) => e.id == fromLine.id);
-    final selected = currentOk ? fromLine : healthy.first;
+    final productionIds = {
+      for (final line in LineRepository.instance.productionLines) line.id,
+    };
+    final selected = LineSwitchUtil.pickProbeSelectTarget(
+      current: fromLine,
+      healthySortedByLatency: healthy,
+      productionIds: productionIds,
+    );
     final selectedMs = ref.read(lineProbeCacheProvider)[selected.id]?.latencyMs;
 
     if (selected.id != fromLine.id) {
@@ -937,7 +1038,28 @@ class LineNotifier extends Notifier<LineConfig> {
     }
     ref.read(configStoreProvider.notifier).setLineStatus(WsStatus.connected);
     unawaited(ref.read(lineEventQueueProvider).flush());
+    // 通 1 条就放行后，后台再凑几条候选，供发码失败自动切线。
+    if (!exhaustive) {
+      unawaited(_topUpHealthyLinesAfterAuth());
+    }
     return true;
+  }
+
+  /// 登录快速探通后补探更多通线（不改当前线、不改 chip）。
+  Future<void> _topUpHealthyLinesAfterAuth() async {
+    if (!ref.mounted) return;
+    if (_batchProbeBusy) return;
+    if (lastHealthyLines.length >= LineManager.batchProbeStopWhenHealthy) {
+      return;
+    }
+    try {
+      await refreshHealthyLines(
+        triggerSource: 'auth_probe_topup',
+        fastAuth: false,
+      );
+    } catch (e) {
+      log.w('[Line] auth top-up probe failed: $e');
+    }
   }
 
   /// 注册/登录请求网络失败后：切到下一条已探通且未试过的线路。
@@ -955,8 +1077,20 @@ class LineNotifier extends Notifier<LineConfig> {
 
     var next = pick();
     if (next == null) {
-      log.i('[Line] failover: refresh probeAll (tried=$triedIds)');
-      await _probeAllAndSelectBest();
+      // 等登录后台补探结束，通常已有更多候选，避免立刻再开一轮。
+      for (var i = 0; i < 40 && _batchProbeBusy; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+        if (!ref.mounted) return null;
+      }
+      next = pick();
+    }
+    if (next == null) {
+      log.i('[Line] failover: refresh probe batch (tried=$triedIds)');
+      // 发码/登录失败切线需要多条候选；勿走 fastAuth（通 1 条即停）。
+      await refreshHealthyLines(
+        triggerSource: triggerSource,
+        fastAuth: false,
+      );
       if (!ref.mounted) return null;
       next = pick();
     }

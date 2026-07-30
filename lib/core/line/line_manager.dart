@@ -10,29 +10,118 @@ import '../utils/line_error_util.dart';
 import 'line_config.dart';
 import 'line_probe_outcome.dart';
 
-/// 按健康分档排序，同档内随机打乱：通 > 未知 > 失败。
+/// 取 host 注册域族（如 `zenty.dvdda.com` → `dvdda.com`），用于探活打散。
+String lineHostFamily(String host) {
+  final parts = host.toLowerCase().split('.').where((e) => e.isNotEmpty);
+  final list = parts.toList();
+  if (list.length >= 2) {
+    return '${list[list.length - 2]}.${list[list.length - 1]}';
+  }
+  return host.toLowerCase();
+}
+
+/// 同档内按域名族 round-robin，避免首批全撞同一套坏 DNS。
+List<LineConfig> diversifyByHostFamily(
+  List<LineConfig> lines,
+  Random random,
+) {
+  if (lines.length <= 1) return List<LineConfig>.from(lines);
+  final buckets = <String, List<LineConfig>>{};
+  for (final line in lines) {
+    final key = lineHostFamily(line.host);
+    (buckets[key] ??= <LineConfig>[]).add(line);
+  }
+  for (final bucket in buckets.values) {
+    bucket.shuffle(random);
+  }
+  final keys = buckets.keys.toList()..shuffle(random);
+  final out = <LineConfig>[];
+  var progressed = true;
+  while (progressed) {
+    progressed = false;
+    for (final key in keys) {
+      final bucket = buckets[key]!;
+      if (bucket.isEmpty) continue;
+      out.add(bucket.removeAt(0));
+      progressed = true;
+    }
+  }
+  return out;
+}
+
+/// 通线记忆超过此时长视为过期，需重探（不稳定线避免长期霸榜）。
+const Duration kProbeHealthyMaxAge = Duration(minutes: 30);
+
+/// 近期失败冷却：冷却期内排到最后；过期后当未知再给机会。
+const Duration kProbeFailCooldown = Duration(minutes: 12);
+
+/// 按健康分档排序，同档内优先池在前，再按域名族打散：
+/// 通+优先 > 通+其它 > 未知+优先 > 未知+其它 > 失败+优先 > 失败+其它。
+///
+/// [priorHealth] 带时间衰减：过期通线降为未知，冷却中失败置底。
 List<LineConfig> orderLinesForProbe(
   List<LineConfig> lines,
   Map<String, LineProbeCacheEntry?> priorHealth,
-  Random random,
-) {
-  final healthy = <LineConfig>[];
-  final unknown = <LineConfig>[];
-  final failed = <LineConfig>[];
+  Random random, {
+  DateTime? now,
+  Duration healthyMaxAge = kProbeHealthyMaxAge,
+  Duration failCooldown = kProbeFailCooldown,
+}) {
+  final nowMs = (now ?? DateTime.now()).millisecondsSinceEpoch;
+  final healthyPreferred = <LineConfig>[];
+  final healthyOther = <LineConfig>[];
+  final unknownPreferred = <LineConfig>[];
+  final unknownOther = <LineConfig>[];
+  final failedPreferred = <LineConfig>[];
+  final failedOther = <LineConfig>[];
   for (final line in lines) {
-    final entry = priorHealth[line.id];
-    if (entry == null) {
-      unknown.add(line);
-    } else if (entry.ok) {
-      healthy.add(line);
-    } else {
-      failed.add(line);
+    final preferred = isPreferredBuiltinLine(line.id);
+    final tier = classifyProbeHealth(
+      priorHealth[line.id],
+      nowMs: nowMs,
+      healthyMaxAge: healthyMaxAge,
+      failCooldown: failCooldown,
+    );
+    switch (tier) {
+      case ProbeHealthTier.healthy:
+        (preferred ? healthyPreferred : healthyOther).add(line);
+      case ProbeHealthTier.unknown:
+        (preferred ? unknownPreferred : unknownOther).add(line);
+      case ProbeHealthTier.failed:
+        (preferred ? failedPreferred : failedOther).add(line);
     }
   }
-  healthy.shuffle(random);
-  unknown.shuffle(random);
-  failed.shuffle(random);
-  return [...healthy, ...unknown, ...failed];
+  return [
+    ...diversifyByHostFamily(healthyPreferred, random),
+    ...diversifyByHostFamily(healthyOther, random),
+    ...diversifyByHostFamily(unknownPreferred, random),
+    ...diversifyByHostFamily(unknownOther, random),
+    ...diversifyByHostFamily(failedPreferred, random),
+    ...diversifyByHostFamily(failedOther, random),
+  ];
+}
+
+/// 探活缓存时间衰减后的分档。
+enum ProbeHealthTier { healthy, unknown, failed }
+
+/// 将探活缓存归为 healthy / unknown / failed（含过期与冷却）。
+ProbeHealthTier classifyProbeHealth(
+  LineProbeCacheEntry? entry, {
+  required int nowMs,
+  Duration healthyMaxAge = kProbeHealthyMaxAge,
+  Duration failCooldown = kProbeFailCooldown,
+}) {
+  if (entry == null) return ProbeHealthTier.unknown;
+  final age = nowMs - entry.checkedAtMs;
+  if (age < 0) return ProbeHealthTier.unknown;
+  if (entry.ok) {
+    return age <= healthyMaxAge.inMilliseconds
+        ? ProbeHealthTier.healthy
+        : ProbeHealthTier.unknown;
+  }
+  return age <= failCooldown.inMilliseconds
+      ? ProbeHealthTier.failed
+      : ProbeHealthTier.unknown;
 }
 
 /// 线路探活与择优。对应 im-uniapp `common/line-manager.js`。
@@ -56,6 +145,19 @@ class LineManager {
   /// 登录/自动切线：每批并发条数；凑满通线数即停。
   static const int batchProbeSize = 5;
   static const int batchProbeStopWhenHealthy = 5;
+
+  /// 登录/注册首次探活：通 1 条立刻可选线，缩短「连接中」。
+  /// 超时偏短；优先池/兜底都限批，避免客户干等十几秒。
+  static const Duration authBatchProbeTimeout = Duration(milliseconds: 1500);
+  static const int authBatchProbeMaxAttempts = 1;
+  static const int authBatchProbeSize = 6;
+  static const int authBatchProbeStopWhenHealthy = 1;
+
+  /// 优先池最多探批数（约 12 条好线）；再不通立刻扩兜底。
+  static const int authPreferredMaxBatches = 2;
+
+  /// 兜底最多探批数（约 18 条种子）；优先池不稳时多挖内置池。
+  static const int authFallbackMaxBatches = 3;
 
   /// 最近一次探活成功的本地开发线路（127.0.0.1 或局域网 IP）。
   LineConfig? resolvedLocalDevLine;
@@ -158,6 +260,8 @@ class LineManager {
     for (var i = 1; i <= attempts; i++) {
       last = await _probeOnce(line, timeout: timeout);
       if (last.ok) return last;
+      // DNS 解析失败重试几乎无效，直接换下一条。
+      if (last.errorCategory == 'dns') return last;
       if (i < attempts) {
         log.w(
           '[Line] probe ${line.id}@${line.host} '
@@ -248,7 +352,7 @@ class LineManager {
     return results;
   }
 
-  /// 分批探活：健康优先、同档随机、每批 [batchSize] 条，凑满 [stopWhenHealthy] 通即停。
+  /// 分批探活：健康优先、域名族打散、每批 [batchSize] 条，凑满 [stopWhenHealthy] 通即停。
   ///
   /// 登录/自动切线用，缩短「连接中」；未探到的线不出现在结果里。
   Future<List<({LineConfig line, LineProbeOutcome outcome})>> probeAllBatched({
@@ -278,6 +382,27 @@ class LineManager {
     );
   }
 
+  /// 登录/注册页快速探活：通 1 条即停，短超时、不重试。
+  ///
+  /// 先探 [kPreferredBuiltinLineIds] 优先池；全不通再扩到其余内置。
+  Future<List<({LineConfig line, LineProbeOutcome outcome})>>
+      probeAllBatchedForAuth({
+    List<LineConfig>? lines,
+    Map<String, LineProbeCacheEntry?> priorHealth = const {},
+    Random? random,
+  }) {
+    return runAuthTwoPhaseBatchedProbe(
+      lines: lines ?? kLines,
+      priorHealth: priorHealth,
+      random: random,
+      probe: (line) => probeDetailed(
+        line,
+        timeout: authBatchProbeTimeout,
+        maxAttempts: authBatchProbeMaxAttempts,
+      ),
+    );
+  }
+
   /// 并发探活所有线路，返回延迟最低的可用线路；全部不可用返回 null。
   Future<LineConfig?> pickFastest({
     List<LineConfig>? lines,
@@ -296,6 +421,54 @@ class LineManager {
     if (best != null) log.i('[Line] fastest=${best.id} ${bestMs}ms');
     return best;
   }
+}
+
+/// 登录探活两阶段：优先池有通线则不碰兜底；优先池限批不通再短扩探。
+Future<List<({LineConfig line, LineProbeOutcome outcome})>>
+    runAuthTwoPhaseBatchedProbe({
+  required List<LineConfig> lines,
+  required Future<LineProbeOutcome> Function(LineConfig line) probe,
+  Map<String, LineProbeCacheEntry?> priorHealth = const {},
+  Random? random,
+  bool Function(String id) isPreferred = isPreferredBuiltinLine,
+}) async {
+  final preferred = lines.where((l) => isPreferred(l.id)).toList();
+  final others = lines.where((l) => !isPreferred(l.id)).toList();
+  Future<List<({LineConfig line, LineProbeOutcome outcome})>> phase(
+    List<LineConfig> phaseLines, {
+    required int maxBatches,
+  }) {
+    return runBatchedProbe(
+      lines: phaseLines,
+      priorHealth: priorHealth,
+      batchSize: LineManager.authBatchProbeSize,
+      stopWhenHealthy: LineManager.authBatchProbeStopWhenHealthy,
+      maxBatches: maxBatches,
+      random: random,
+      probe: probe,
+    );
+  }
+
+  if (preferred.isEmpty) {
+    return phase(lines, maxBatches: LineManager.authFallbackMaxBatches);
+  }
+  final first = await phase(
+    preferred,
+    maxBatches: LineManager.authPreferredMaxBatches,
+  );
+  if (first.any((r) => r.outcome.ok) || others.isEmpty) {
+    return first;
+  }
+  log.i(
+    '[Line] auth preferred capped/failed '
+    '(probed=${first.length}/${preferred.length}), '
+    'expand to ${others.length} fallbacks',
+  );
+  final second = await phase(
+    others,
+    maxBatches: LineManager.authFallbackMaxBatches,
+  );
+  return [...first, ...second];
 }
 
 /// 可单测的分批探活核心（与网络解耦）。

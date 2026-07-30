@@ -17,10 +17,13 @@ import '../pages/chat/rtc_private_page.dart';
 import '../pages/chat/rtc_group_page.dart';
 import '../pages/common/external_link_page.dart';
 import '../pages/scan/scan_page.dart';
+import '../core/di/app_providers.dart';
 import '../pages/login/login_page.dart';
+import '../pages/login/onboarding_page.dart';
 import '../pages/login/qr_login_confirm_page.dart';
 import '../pages/login/register_page.dart';
 import '../pages/login/reset_pwd_page.dart';
+import '../pages/login/startup_splash_page.dart';
 import '../pages/friend/friend_add_page.dart';
 import '../pages/friend/friend_contact_page.dart';
 import '../pages/friend/friend_apply_page.dart';
@@ -50,8 +53,10 @@ import '../services/auth_controller.dart';
 /// 路由路径常量（契约：并行 agent 用这些名字跳转，不散写字符串）。
 /// 新增页面挂路由需向主 agent 申请登记，不私改本文件。
 abstract final class AppRoutes {
-  /// 冷启动入口（与 [login] 相同；无独立 Splash 路由）。
-  static const String splash = '/login';
+  /// 冷启动氛围页（bootstrap / 探路期间展示）。
+  static const String splash = '/startup';
+  static const String startup = '/startup';
+  static const String onboarding = '/onboarding';
   static const String login = '/login';
   static const String register = '/register';
   static const String resetPwd = '/reset-pwd';
@@ -200,7 +205,7 @@ final goRouterProvider = Provider<GoRouter>((ref) {
 
   return GoRouter(
     navigatorKey: rootNavigatorKey,
-    initialLocation: AppRoutes.login,
+    initialLocation: AppRoutes.startup,
     observers: [imRouteObserver],
     refreshListenable: refresh,
     errorBuilder: (context, state) => Scaffold(
@@ -218,29 +223,49 @@ final goRouterProvider = Provider<GoRouter>((ref) {
     redirect: (context, state) {
       final status = ref.read(authControllerProvider);
       final loc = state.matchedLocation;
+      final seenOnboarding =
+          ref.read(kvStoreProvider).hasSeenOnboarding;
 
+      final onStartup = loc == AppRoutes.startup;
+      final onOnboarding = loc == AppRoutes.onboarding;
       final onAuthPage = loc == AppRoutes.login ||
           loc == AppRoutes.register ||
           loc == AppRoutes.resetPwd;
 
-      // 启动判定中：先展示登录页，避免闪屏去掉后长时间空白。
+      // 启动判定中：全屏氛围启动页（探路 / bootstrap）。
       if (status == AuthStatus.unknown) {
-        return onAuthPage ? null : AppRoutes.login;
+        return onStartup ? null : AppRoutes.startup;
       }
 
       final loggedIn = status == AuthStatus.authenticated;
 
       if (!loggedIn) {
+        if (onStartup) {
+          return seenOnboarding ? AppRoutes.login : AppRoutes.onboarding;
+        }
+        // 首次安装：未看完引导只允许引导页。
+        if (!seenOnboarding) {
+          return onOnboarding ? null : AppRoutes.onboarding;
+        }
+        if (onOnboarding) return AppRoutes.login;
         // 未登录：允许登录/注册/找回密码页，其余踢回登录。
         return onAuthPage ? null : AppRoutes.login;
       }
-      // 已登录：鉴权页一律进主框架。
-      if (onAuthPage) {
+      // 已登录：启动/鉴权/引导页一律进主框架。
+      if (onAuthPage || onOnboarding || onStartup) {
         return AppRoutes.main;
       }
       return null;
     },
     routes: [
+      GoRoute(
+        path: AppRoutes.startup,
+        builder: (_, _) => const StartupSplashPage(),
+      ),
+      GoRoute(
+        path: AppRoutes.onboarding,
+        builder: (_, _) => const OnboardingPage(),
+      ),
       GoRoute(
         path: AppRoutes.login,
         builder: (_, _) => const LoginPage(),

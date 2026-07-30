@@ -104,6 +104,125 @@ abstract final class LineSwitchUtil {
     return '不通';
   }
 
+  /// 启动预探成功后，登录页可复用的最长时间。
+  static const authWarmupReuseTtl = Duration(minutes: 2);
+
+  /// 闪屏内等待登录探路的上限（超时仍进登录页，探路可后台继续）。
+  static const authWarmupSplashWait = Duration(milliseconds: 2500);
+
+  /// 启动预探结果是否仍可被登录页直接复用（避免二次全量探）。
+  static bool shouldReuseAuthWarmup({
+    required bool lastOk,
+    required DateTime? completedAt,
+    required bool hasHealthyLines,
+    DateTime? now,
+    Duration ttl = authWarmupReuseTtl,
+  }) {
+    if (!lastOk || !hasHealthyLines || completedAt == null) return false;
+    final age = (now ?? DateTime.now()).difference(completedAt);
+    return !age.isNegative && age <= ttl;
+  }
+
+  /// 冷启动内置池过大时，面板只展示优先池 / 当前线 / 已探通，避免刷 400+。
+  static const panelSoftCap = 48;
+
+  /// 构造线路面板列表：运行时表较小时原样排序；过大则收束到可选手动线。
+  static List<LineConfig> linesForSwitcherPanel({
+    required List<LineConfig> runtimeLines,
+    required String currentId,
+    required Map<String, LineProbeCacheEntry?> probeCache,
+    int softCap = panelSoftCap,
+    bool Function(String id) isPreferred = isPreferredBuiltinLine,
+  }) {
+    final source = runtimeLines.length <= softCap
+        ? runtimeLines
+        : () {
+            final picked = <String, LineConfig>{};
+            for (final line in runtimeLines) {
+              if (line.id == currentId || isPreferred(line.id)) {
+                picked[line.id] = line;
+                continue;
+              }
+              final entry = probeCache[line.id];
+              if (entry != null && entry.ok) {
+                picked[line.id] = line;
+              }
+            }
+            if (picked.isEmpty) {
+              return runtimeLines.take(softCap).toList(growable: false);
+            }
+            return picked.values.toList(growable: false);
+          }();
+    return orderLinesForPanel(
+      lines: source,
+      currentId: currentId,
+      probeCache: probeCache,
+    );
+  }
+
+  /// 探活选线：优先落在远程启用表内的通线；启用表全挂才用种子通线。
+  static LineConfig pickProbeSelectTarget({
+    required LineConfig current,
+    required List<LineConfig> healthySortedByLatency,
+    required Set<String> productionIds,
+  }) {
+    if (healthySortedByLatency.isEmpty) return current;
+    final inProduction = healthySortedByLatency
+        .where((e) => productionIds.contains(e.id))
+        .toList(growable: false);
+    final pool =
+        inProduction.isNotEmpty ? inProduction : healthySortedByLatency;
+    if (pool.any((e) => e.id == current.id)) return current;
+    return pool.first;
+  }
+
+  /// 线路面板排序：当前线 → 已通（快到慢）→ 未检测 → 不通。
+  ///
+  /// 避免前排域名 DNS 挂时，用户一打开面板只看到「全不通」。
+  static List<LineConfig> orderLinesForPanel({
+    required List<LineConfig> lines,
+    required String currentId,
+    required Map<String, LineProbeCacheEntry?> probeCache,
+  }) {
+    int rank(LineConfig line) {
+      if (line.id == currentId) return 0;
+      final entry = probeCache[line.id];
+      if (entry == null) return 2;
+      if (entry.ok) return 1;
+      return 3;
+    }
+
+    final sorted = List<LineConfig>.from(lines);
+    sorted.sort((a, b) {
+      final ra = rank(a);
+      final rb = rank(b);
+      if (ra != rb) return ra.compareTo(rb);
+      if (ra == 1) {
+        final ma = probeCache[a.id]?.latencyMs ?? 1 << 30;
+        final mb = probeCache[b.id]?.latencyMs ?? 1 << 30;
+        final byMs = ma.compareTo(mb);
+        if (byMs != 0) return byMs;
+      }
+      return a.name.compareTo(b.name);
+    });
+    return sorted;
+  }
+
+  /// 桥接种子线：远程表未包含当前线，但探活仍新鲜 → 暂留，避免刚救活又被踢回坏线。
+  static const seedBridgeKeepMaxAge = Duration(minutes: 10);
+
+  static bool shouldKeepSeedBridgeLine({
+    required LineProbeCacheEntry? probe,
+    DateTime? now,
+    Duration maxAge = seedBridgeKeepMaxAge,
+  }) {
+    final entry = probe;
+    if (entry == null || !entry.ok) return false;
+    final nowMs = (now ?? DateTime.now()).millisecondsSinceEpoch;
+    final age = nowMs - entry.checkedAtMs;
+    return age >= 0 && age <= maxAge.inMilliseconds;
+  }
+
   /// 线路 chip 状态。
   ///
   /// - 未登录：只看 HTTPS 探活 [lineStatus]
@@ -135,8 +254,9 @@ abstract final class LineSwitchUtil {
 
   /// 是否展示线路入口（chip / 面板）。
   ///
-  /// 当前线路健康时隐藏；失败、探活中、消息通道异常时展示，便于手切，
-  /// 同时后台仍走自动探活 / 切线。
+  /// - 已连通：隐藏
+  /// - 未登录探活中（连接中/鉴权中）：隐藏，避免登录页干等焦虑
+  /// - 失败 / 已登录探活中 / 消息通道异常：展示，便于手切
   static bool shouldShowSwitcherEntry({
     required bool isAuthenticated,
     required WsStatus lineStatus,
@@ -154,7 +274,13 @@ abstract final class LineSwitchUtil {
       lineStatus: lineStatus,
       wsStatus: wsStatus,
     );
-    return status != WsStatus.connected;
+    if (status == WsStatus.connected) return false;
+    // 登录/注册页：连接中不露芯片，只在失败时出现。
+    if (!isAuthenticated &&
+        (status == WsStatus.connecting || status == WsStatus.authing)) {
+      return false;
+    }
+    return true;
   }
   /// 是否应触发 WS 连续断开自动切线。
   static bool shouldTriggerWsDisconnectFailover({

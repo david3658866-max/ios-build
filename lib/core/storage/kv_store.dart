@@ -241,6 +241,30 @@ class KvStore {
   /// 登出时清理明文密码残留（保留手机号方便回填）。
   Future<void> clearStoredPassword() => _box.delete(StorageKeys.password);
 
+  // ---- 首次引导 ----
+
+  bool get hasSeenOnboarding =>
+      _box.get(StorageKeys.hasSeenOnboarding) == true;
+
+  Future<void> setHasSeenOnboarding(bool value) =>
+      _box.put(StorageKeys.hasSeenOnboarding, value);
+
+  int? get onboardingInstallMs {
+    final v = _box.get(StorageKeys.onboardingInstallMs);
+    if (v is int) return v;
+    if (v is num) return v.toInt();
+    return null;
+  }
+
+  /// 绑定当前安装：安装时间变化或不一致时清空「已看引导」（防备份误恢复）。
+  Future<void> syncOnboardingForInstall(int installMs) async {
+    if (installMs <= 0) return;
+    final prev = onboardingInstallMs;
+    if (prev == installMs) return;
+    await _box.put(StorageKeys.onboardingInstallMs, installMs);
+    await _box.put(StorageKeys.hasSeenOnboarding, false);
+  }
+
   // ---- 通用 ----
 
   T? get<T>(String key) => _box.get(key) as T?;

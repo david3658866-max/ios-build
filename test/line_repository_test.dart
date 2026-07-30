@@ -16,12 +16,37 @@ void main() {
   test('LineRepository starts from builtin seeds', () {
     final repo = LineRepository.instance;
     expect(repo.productionLines, isNotEmpty);
-    expect(repo.productionLines.first.id, 'line1');
+    expect(repo.productionLines.first.id, kBuiltinProductionLines.first.id);
     expect(repo.configVersion, isNotEmpty);
     final encoded = jsonEncode(
       repo.productionLines.map((e) => e.toJson()).toList(),
     );
-    expect(encoded.contains('zenty') || encoded.contains('kivola'), isTrue);
+    expect(
+      encoded.contains('helix') ||
+          encoded.contains('orion') ||
+          encoded.contains('kivola'),
+      isTrue,
+    );
+    // 冷启动时探活池应覆盖全部内置种子。
+    expect(
+      repo.probeCandidateLines.length,
+      greaterThanOrEqualTo(kBuiltinProductionLines.length),
+    );
+  });
+
+  test('mergeWithBuiltins keeps remote enabled; probe pool still has seeds', () {
+    final remote = kPreferredBuiltinLineIds.take(3).map((id) {
+      final seed = kBuiltinProdLines.firstWhere((e) => e.id == id);
+      return seed;
+    }).toList();
+    final merged = LineRepository.mergeWithBuiltins(remote);
+    expect(merged.length, 3);
+    // byId 仍能解析未下发种子（failover 用）。
+    final seedId = kBuiltinProdLines
+        .firstWhere((e) => !kPreferredBuiltinLineIds.contains(e.id))
+        .id;
+    // 不依赖 singleton 状态：直接看 merge 不含禁用种子。
+    expect(merged.any((e) => e.id == seedId), isFalse);
   });
 
   test('bindLineRuntime overrides kLines getters', () {

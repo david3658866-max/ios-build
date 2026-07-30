@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_native_splash/flutter_native_splash.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:hive_flutter/hive_flutter.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 
 import 'app.dart';
 import 'core/di/app_providers.dart';
@@ -66,6 +67,16 @@ Future<void> main() async {
         return KvStore.open().timeout(const Duration(seconds: 8));
       });
   debugPrint('[main] kv ok');
+  try {
+    final pkg = await PackageInfo.fromPlatform().timeout(
+      const Duration(seconds: 3),
+    );
+    final installMs = pkg.installTime?.millisecondsSinceEpoch ?? 0;
+    await kv.syncOnboardingForInstall(installMs);
+    debugPrint('[main] onboarding installMs=$installMs seen=${kv.hasSeenOnboarding}');
+  } catch (e) {
+    debugPrint('[main] onboarding install sync skip: $e');
+  }
   LineRepository.instance.bindKv(kv);
   UiBreadcrumb.bind(kv);
   SessionExitTracker.bind(kv);

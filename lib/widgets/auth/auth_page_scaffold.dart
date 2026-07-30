@@ -35,7 +35,7 @@ class _AuthPageScaffoldState extends ConsumerState<AuthPageScaffold> {
   @override
   void initState() {
     super.initState();
-    // 登录/注册页：并发探活全部线路，不通则自动切到最快可用线。
+    // 登录/注册页：快速探通（通 1 条即切），不通则 Toast。
     WidgetsBinding.instance.addPostFrameCallback((_) {
       unawaited(_probeAuthLines());
     });
@@ -43,16 +43,13 @@ class _AuthPageScaffoldState extends ConsumerState<AuthPageScaffold> {
 
   Future<void> _probeAuthLines() async {
     if (!mounted) return;
-    final fromId = ref.read(lineProvider).id;
+    // 与闪屏预探共用 Future / 成功结果；自动切线静默，不弹「已切换至xx」。
     final ok = await ref
         .read(lineProvider.notifier)
         .checkCurrentLineStatus(allowFallback: true);
     if (!mounted) return;
-    final line = ref.read(lineProvider);
     if (!ok) {
       ImToast.show(context, LineSwitchUtil.allLinesFailedToast);
-    } else if (line.id != fromId) {
-      ImToast.show(context, LineSwitchUtil.autoSwitchToast(line.name));
     }
   }
 

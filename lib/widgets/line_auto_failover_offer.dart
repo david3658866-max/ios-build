@@ -150,7 +150,7 @@ class LineAutoFailoverNotifier extends Notifier<LineAutoFailoverUiState> {
         await ref.read(lineProvider.notifier).adoptHealthyLine(targetLine.id);
     if (!context.mounted) return;
     if (outcome.switched && outcome.success) {
-      ImToast.show(context, LineSwitchUtil.autoSwitchToast(outcome.line.name));
+      // 自动切线静默，不提示「已切换至xx」。
     } else if (!outcome.success) {
       ImToast.show(context, LineSwitchUtil.switchFailedToast);
     }

@@ -35,7 +35,6 @@ Future<void> showLineSwitcherPanel(
       return _LineSwitcherPanelOverlay(
         anchorKey: anchorKey,
         align: align,
-        current: ref.read(lineProvider),
       );
     },
   );
@@ -59,12 +58,10 @@ class _LineSwitcherPanelOverlay extends ConsumerStatefulWidget {
   const _LineSwitcherPanelOverlay({
     required this.anchorKey,
     required this.align,
-    required this.current,
   });
 
   final GlobalKey anchorKey;
   final LinePanelAlign align;
-  final LineConfig current;
 
   @override
   ConsumerState<_LineSwitcherPanelOverlay> createState() =>
@@ -109,10 +106,16 @@ class _LineSwitcherPanelOverlayState
     final top =
         (offset?.dy ?? kToolbarHeight) + (size?.height ?? 0) - rpx(context, 6);
     final probeCache = ref.watch(lineProbeCacheProvider);
+    final currentLine = ref.watch(lineProvider);
     final lineStatus = ref.watch(configStoreProvider).lineStatus;
     final probing = _retrying ||
         lineStatus == WsStatus.connecting ||
         lineStatus == WsStatus.authing;
+    final panelLines = LineSwitchUtil.linesForSwitcherPanel(
+      runtimeLines: kVisibleLines,
+      currentId: currentLine.id,
+      probeCache: probeCache,
+    );
 
     double? left;
     double? right;
@@ -135,9 +138,10 @@ class _LineSwitcherPanelOverlayState
       color: Colors.transparent,
       child: Stack(
         children: [
+          // 遮罩始终可关：探活中若禁用会点不掉（本地线超时等 connecting 很长）。
           Positioned.fill(
             child: GestureDetector(
-              onTap: probing ? null : () => Navigator.of(context).pop(),
+              onTap: () => Navigator.of(context).pop(),
               behavior: HitTestBehavior.opaque,
             ),
           ),
@@ -191,9 +195,9 @@ class _LineSwitcherPanelOverlayState
                       Container(
                         width: double.infinity,
                         padding: EdgeInsets.fromLTRB(
-                          rpx(context, 20),
+                          rpx(context, 12),
                           rpx(context, 8),
-                          rpx(context, 8),
+                          rpx(context, 4),
                           rpx(context, 8),
                         ),
                         decoration: const BoxDecoration(
@@ -257,6 +261,22 @@ class _LineSwitcherPanelOverlayState
                                 ),
                               ),
                             ),
+                            Material(
+                              color: Colors.transparent,
+                              child: InkWell(
+                                onTap: () => Navigator.of(context).pop(),
+                                borderRadius:
+                                    BorderRadius.circular(rpx(context, 8)),
+                                child: Padding(
+                                  padding: EdgeInsets.all(rpx(context, 10)),
+                                  child: Icon(
+                                    Icons.close,
+                                    size: rpx(context, 28),
+                                    color: const Color(0xFF999999),
+                                  ),
+                                ),
+                              ),
+                            ),
                           ],
                         ),
                       ),
@@ -267,17 +287,15 @@ class _LineSwitcherPanelOverlayState
                           shrinkWrap: true,
                           padding: EdgeInsets.zero,
                           children: [
-                            for (var i = 0; i < kVisibleLines.length; i++)
+                            for (var i = 0; i < panelLines.length; i++)
                               _LinePanelItem(
-                                line: kVisibleLines[i],
-                                selected:
-                                    kVisibleLines[i].id == widget.current.id,
-                                showDivider: i < kVisibleLines.length - 1,
-                                probe: probeCache[kVisibleLines[i].id],
-                                onTap: probing
-                                    ? null
-                                    : () => Navigator.of(context)
-                                        .pop(kVisibleLines[i].id),
+                                line: panelLines[i],
+                                selected: panelLines[i].id == currentLine.id,
+                                showDivider: i < panelLines.length - 1,
+                                probe: probeCache[panelLines[i].id],
+                                // 探活中仍可选线并关闭；仅「重新检测」防重复点。
+                                onTap: () => Navigator.of(context)
+                                    .pop(panelLines[i].id),
                               ),
                           ],
                         ),

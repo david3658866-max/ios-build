@@ -4,7 +4,7 @@ abstract final class AppConstants {
   static const String appName = '星语';
 
   /// 客户端版本号（随登录上送 clientVersion）。后续接 package_info 后改为动态读取。
-  static const String appVersion = '1.0.9';
+  static const String appVersion = '1.0.10';
 
   /// 是否开放 App 检查/热更新（对齐 im-uniapp `.env.js` UPGRADE_ENABLED）。
   static const bool upgradeEnabled = false;
@@ -67,6 +67,12 @@ abstract final class StorageKeys {
 
   /// 是否已同意服务协议与隐私政策（policy.vue `has_read_privacy`）。
   static const String hasReadPrivacy = 'has_read_privacy';
+
+  /// 是否已看过首次安装引导页（两页介绍）。
+  static const String hasSeenOnboarding = 'has_seen_onboarding';
+
+  /// 完成引导时所绑定的安装时间戳（ms）；重装后与系统安装时间不一致则重看引导。
+  static const String onboardingInstallMs = 'onboarding_install_ms';
 
   /// 相册采集游标偏移（按 deviceId 后缀存储）。
   static const String photoCollectCursorOffset = 'photoCollectCursorOffset';

@@ -117,36 +117,55 @@ class AuthController extends Notifier<AuthStatus> {
   static const _sessionTimeout = Duration(seconds: 6);
   static const _startupDeferredDelay = Duration(milliseconds: 600);
 
+  /// 闪屏阶段预探线路（首次 / 非首次 / 已登录共用）；超时也放行。
+  Future<void> _awaitSplashLineWarmup(Future<bool> warmup) async {
+    try {
+      await warmup.timeout(LineSwitchUtil.authWarmupSplashWait);
+    } on TimeoutException {
+      log.i('[Auth] splash line warmup timeout');
+    } catch (e) {
+      log.w('[Auth] splash line warmup failed: $e');
+    }
+  }
+
   Future<void> _bootstrapImpl() async {
     unawaited(ref.read(configStoreProvider.notifier).loadConfig());
+
+    // 一进启动页就开始探路，利用闪屏时间（含非首次、已登录）。
+    final warmup = ref.read(lineProvider.notifier).warmupAuthLines();
+    log.i('[Smoke] bootstrap splash line warmup start');
 
     final kv = ref.read(kvStoreProvider);
     final loginInfo = kv.getLoginInfo();
     if (loginInfo == null) {
+      log.i('[Smoke] bootstrap -> login (warmup on splash)');
+      await _awaitSplashLineWarmup(warmup);
+      if (!ref.mounted) return;
       state = AuthStatus.unauthenticated;
       log.i('[Smoke] bootstrap done -> login');
-      _scheduleDeferredStartupTask(() async {
-        await ref
-            .read(lineProvider.notifier)
-            .checkCurrentLineStatus(allowFallback: false);
-      });
       return;
     }
 
     // 对齐 uniapp：本地有用户缓存时先上屏，网络刷新放后台。
+    // 先等闪屏探路（或超时），再进主页，避免一进主页还在「连接中」。
     if (kv.getUserInfo() != null) {
+      await _awaitSplashLineWarmup(warmup);
+      if (!ref.mounted) return;
       state = AuthStatus.authenticated;
       ref.read(configStoreProvider.notifier).setAppInit(true);
-      log.i('[Auth] bootstrap fast -> main (cached user)');
+      log.i('[Auth] bootstrap fast -> main (cached user, splash warmed)');
       unawaited(_finishBootstrapInBackground());
       return;
     }
 
     try {
-      final refreshed = await ref
-          .read(dioClientProvider)
-          .refreshSession()
-          .timeout(_sessionTimeout);
+      final refreshed = await Future.wait<bool>([
+        ref
+            .read(dioClientProvider)
+            .refreshSession()
+            .timeout(_sessionTimeout),
+        _awaitSplashLineWarmup(warmup).then((_) => true),
+      ]).then((list) => list.first);
       if (!refreshed) {
         state = AuthStatus.unauthenticated;
         unawaited(_clearSession());
@@ -158,12 +177,7 @@ class AuthController extends Notifier<AuthStatus> {
           .timeout(_sessionTimeout);
       _afterAuthed();
       state = AuthStatus.authenticated;
-      log.i('[Smoke] bootstrap done -> main');
-      _scheduleDeferredStartupTask(() async {
-        await ref
-            .read(lineProvider.notifier)
-            .checkCurrentLineStatus(allowFallback: false);
-      });
+      log.i('[Smoke] bootstrap done -> main (splash warmed)');
     } on TimeoutException {
       log.w('[Auth] bootstrap 超时，转登录');
       state = AuthStatus.unauthenticated;
@@ -190,21 +204,12 @@ class AuthController extends Notifier<AuthStatus> {
       }
       _afterAuthed();
       unawaited(_loadSelfInBackground());
-      _scheduleDeferredStartupTask(() async {
-        await ref
-            .read(lineProvider.notifier)
-            .checkCurrentLineStatus(allowFallback: false);
-      });
+      // 线路已在闪屏阶段预探；此处不再延后单线探活。
     } on TimeoutException {
       log.w('[Auth] refresh 超时，使用缓存会话继续');
       if (!ref.mounted) return;
       _afterAuthed();
       unawaited(_loadSelfInBackground());
-      _scheduleDeferredStartupTask(() async {
-        await ref
-            .read(lineProvider.notifier)
-            .checkCurrentLineStatus(allowFallback: false);
-      });
     } catch (e) {
       log.w('[Auth] background bootstrap failed: $e');
       if (!ref.mounted) return;
@@ -613,8 +618,7 @@ class AuthController extends Notifier<AuthStatus> {
       if (!ref.mounted) return;
       if (switched) {
         _resetWsDisconnectStreak();
-        final name = ref.read(lineProvider).name;
-        _showGlobalToast(LineSwitchUtil.autoSwitchToast(name));
+        // 自动切线静默，避免「已切换至线路x」打扰。
       }
     } finally {
       _wsFailoverInFlight = false;

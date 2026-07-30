@@ -35,6 +35,27 @@ class LineRepository {
       ? List<LineConfig>.unmodifiable([kLocalDevLine, ..._production])
       : productionLines;
 
+  /// 探活/failover 候选：远程启用表 ∪ 包内 400+ 种子（同 id 以远程为准）。
+  ///
+  /// 远程只下发 enabled 时，仍可用禁用种子救急；面板不直接展示整池。
+  List<LineConfig> get probeCandidateLines {
+    final byId = <String, LineConfig>{};
+    final order = <String>[];
+    void add(LineConfig line) {
+      if (line.id.isEmpty || byId.containsKey(line.id)) return;
+      byId[line.id] = line;
+      order.add(line.id);
+    }
+
+    for (final line in _production) {
+      add(line);
+    }
+    for (final seed in kBuiltinProductionLines) {
+      add(seed);
+    }
+    return [for (final id in order) byId[id]!];
+  }
+
   LineConfig get defaultLine =>
       kDebugMode ? kLocalDevLine : _production.first;
 
@@ -95,6 +116,10 @@ class LineRepository {
     if (id == "line_local" && !kDebugMode) return _production.first;
     for (final line in visibleLines) {
       if (line.id == id) return line;
+    }
+    // failover 可能落到未下发的内置种子。
+    for (final seed in kBuiltinProductionLines) {
+      if (seed.id == id) return seed;
     }
     return defaultLine;
   }

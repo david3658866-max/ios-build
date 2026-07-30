@@ -42,24 +42,42 @@ class _VortekAppState extends ConsumerState<VortekApp> {
   @override
   void initState() {
     super.initState();
-    // 首帧后启动 bootstrap，并立刻关掉原生闪屏（避免卡在白屏）。
+    // 首帧后 bootstrap；未登录会在闪屏内预探线路，完成/超时后再关闪屏。
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      _removeSplash();
-      if (ref.read(authControllerProvider) == AuthStatus.unknown) {
-        unawaited(ref.read(authControllerProvider.notifier).bootstrap());
-      }
       captureStartupScanDeepLink(ref);
+      unawaited(_bootstrapThenRemoveSplash());
     });
+  }
+
+  Future<void> _bootstrapThenRemoveSplash() async {
+    // 尽早揭掉系统 logo 闪屏，露出 Flutter 全屏氛围启动页。
+    _removeSplash();
+    // 兜底：bootstrap 异常时也不至于一直卡在 startup。
+    unawaited(
+      Future<void>.delayed(const Duration(milliseconds: 4000), () {
+        if (!mounted) return;
+        if (ref.read(authControllerProvider) == AuthStatus.unknown) {
+          log.w('[App] bootstrap watchdog: still unknown after 4s');
+        }
+      }),
+    );
+    try {
+      if (ref.read(authControllerProvider) == AuthStatus.unknown) {
+        await ref.read(authControllerProvider.notifier).bootstrap();
+      }
+    } catch (e) {
+      log.w('[App] bootstrap failed: $e');
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     ref.watch(authenticatedAppInitProvider);
-    final auth = ref.watch(authControllerProvider);
+    ref.watch(authControllerProvider);
 
     ref.listen<AuthStatus>(authControllerProvider, (previous, next) {
-      _removeSplash();
+      // 闪屏由 _bootstrapThenRemoveSplash 统一关闭（含已登录路径的探路等待）。
       if (previous != AuthStatus.authenticated &&
           next == AuthStatus.authenticated) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
