@@ -7,6 +7,7 @@ import '../core/enums/chat_type.dart';
 import '../core/enums/message_type.dart';
 import '../models/friend.dart';
 import '../models/friend_request.dart';
+import '../models/private_message.dart';
 import '../models/user.dart';
 import 'chat_store.dart';
 
@@ -192,6 +193,17 @@ class FriendStore extends Notifier<FriendState> {
     _patchFriend(friendId, isTop: isTop);
   }
 
+  void updateTopMessage(int friendId, PrivateMessage? topMessage) {
+    final list = state.friends.map((f) {
+      if (f.id != friendId) return f;
+      return f.copyWith(
+        topMessage: topMessage,
+        clearTopMessage: topMessage == null,
+      );
+    }).toList();
+    state = state.copyWith(friends: list);
+  }
+
   Future<void> updateFriendFromUser(User user) async {
     final friend = byId(user.id);
     if (friend == null || friend.deleted) return;
@@ -199,19 +211,10 @@ class FriendStore extends Notifier<FriendState> {
     final remark = friend.remarkNickName?.trim();
     final showNick =
         (remark != null && remark.isNotEmpty) ? remark : nick;
-    final updated = Friend(
-      id: friend.id,
+    final updated = friend.copyWith(
       nickName: nick,
       showNickName: showNick,
-      remarkNickName: friend.remarkNickName,
       headImage: user.headImageThumb ?? user.headImage ?? friend.headImage,
-      companyName: friend.companyName,
-      isDnd: friend.isDnd,
-      isTop: friend.isTop,
-      deleted: friend.deleted,
-      online: friend.online,
-      onlineWeb: friend.onlineWeb,
-      onlineApp: friend.onlineApp,
     );
     _upsertFriend(updated);
     await syncChatFromFriend(updated);
@@ -275,16 +278,7 @@ class FriendStore extends Notifier<FriendState> {
     final idx = list.indexWhere((f) => f.id == friend.id);
     if (idx >= 0) {
       final old = list[idx];
-      list[idx] = Friend(
-        id: friend.id,
-        nickName: friend.nickName,
-        showNickName: friend.showNickName,
-        remarkNickName: friend.remarkNickName,
-        headImage: friend.headImage,
-        companyName: friend.companyName,
-        isDnd: friend.isDnd,
-        isTop: friend.isTop,
-        deleted: friend.deleted,
+      list[idx] = friend.copyWith(
         online: old.online,
         onlineWeb: old.onlineWeb,
         onlineApp: old.onlineApp,
@@ -298,19 +292,9 @@ class FriendStore extends Notifier<FriendState> {
   void _patchFriend(int friendId, {bool? isDnd, bool? isTop}) {
     final list = state.friends.map((f) {
       if (f.id != friendId) return f;
-      return Friend(
-        id: f.id,
-        nickName: f.nickName,
-        showNickName: f.showNickName,
-        remarkNickName: f.remarkNickName,
-        headImage: f.headImage,
-        companyName: f.companyName,
-        isDnd: isDnd ?? f.isDnd,
-        isTop: isTop ?? f.isTop,
-        deleted: f.deleted,
-        online: f.online,
-        onlineWeb: f.onlineWeb,
-        onlineApp: f.onlineApp,
+      return f.copyWith(
+        isDnd: isDnd,
+        isTop: isTop,
       );
     }).toList();
     state = state.copyWith(friends: list);

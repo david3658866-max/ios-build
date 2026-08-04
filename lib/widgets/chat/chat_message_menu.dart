@@ -27,6 +27,7 @@ abstract final class ChatMessageMenuBuilder {
     required Message msg,
     required bool canRecall,
     required bool canTop,
+    bool isPinned = false,
   }) {
     if (msg.type == MessageType.tipTime || msg.type == MessageType.tipText) {
       return const [];
@@ -50,7 +51,10 @@ abstract final class ChatMessageMenuBuilder {
         items.add(const ChatMessageMenuItem(key: 'FORWARD', label: '转发'));
       }
       if (canTop) {
-        items.add(const ChatMessageMenuItem(key: 'TOP', label: '置顶'));
+        items.add(ChatMessageMenuItem(
+          key: 'TOP',
+          label: isPinned ? '取消置顶' : '置顶',
+        ));
       }
     }
 

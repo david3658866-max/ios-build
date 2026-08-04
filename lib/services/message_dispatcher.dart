@@ -175,6 +175,21 @@ class MessageDispatcher {
         friends.setTopLocal(friendId, top);
         await chat.setTop(ChatType.private, friendId, top);
         return;
+      case MessageType.friendTopMessage:
+        PrivateMessage? topMsg;
+        final raw = map['content'];
+        if (raw != null && raw.toString().isNotEmpty) {
+          try {
+            final decoded = raw is String ? jsonDecode(raw) : raw;
+            if (decoded is Map) {
+              topMsg = PrivateMessage.fromJson(
+                Map<String, dynamic>.from(decoded),
+              );
+            }
+          } catch (_) {}
+        }
+        friends.updateTopMessage(friendId, topMsg);
+        return;
     }
 
     if (MessageType.isPrivateRtc(msg.type)) {

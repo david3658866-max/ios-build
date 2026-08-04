@@ -1801,6 +1801,7 @@ class _ChatBoxPageState extends ConsumerState<ChatBoxPage> {
       msg: msg,
       canRecall: _canRecallMessage(msg),
       canTop: _canTopMessage(msg),
+      isPinned: _isMessagePinned(msg),
     );
     if (items.isEmpty) return;
 
@@ -1873,11 +1874,55 @@ class _ChatBoxPageState extends ConsumerState<ChatBoxPage> {
         return;
       case 'TOP':
         _keepInputDismissed();
-        final err = await ref
-            .read(chatStoreProvider)
-            .setGroupTopMessage(widget.targetId, msg.id!);
-        if (mounted) {
-          _toast(err ?? '置顶成功');
+        final chatStore = ref.read(chatStoreProvider);
+        if (widget.chatType == ChatType.private) {
+          final pinned = _isMessagePinned(msg);
+          if (pinned) {
+            final ok = await showImConfirmDialog(
+              context,
+              title: '取消置顶',
+              content: '将取消双方的消息置顶，确认移除?',
+              confirmText: '移除',
+            );
+            if (ok == true && mounted) {
+              final err =
+                  await chatStore.removePrivateTopMessage(widget.targetId);
+              if (mounted) {
+                _toast(err ?? '已取消置顶');
+              }
+            }
+          } else {
+            final err = await chatStore.setPrivateTopMessage(
+              widget.targetId,
+              msg.id!,
+            );
+            if (mounted) {
+              _toast(err ?? '置顶成功');
+            }
+          }
+        } else {
+          final pinned = _isMessagePinned(msg);
+          if (pinned) {
+            final ok = await showImConfirmDialog(
+              context,
+              title: '取消置顶',
+              content: '将在当前群聊的所有成员中移除此置顶消息,确认移除?',
+              confirmText: '移除',
+            );
+            if (ok == true && mounted) {
+              final err =
+                  await chatStore.removeGroupTopMessage(widget.targetId);
+              if (mounted) {
+                _toast(err ?? '已取消置顶');
+              }
+            }
+          } else {
+            final err =
+                await chatStore.setGroupTopMessage(widget.targetId, msg.id!);
+            if (mounted) {
+              _toast(err ?? '置顶成功');
+            }
+          }
         }
         return;
       case 'LOCATE_QUOTE':
@@ -1922,9 +1967,33 @@ class _ChatBoxPageState extends ConsumerState<ChatBoxPage> {
 
   bool _canTopMessage(Message msg) {
     if (msg.id == null) return false;
-    if (widget.chatType != ChatType.group) return false;
     if (!QuoteMessageUtil.isNormalType(msg.type)) return false;
+    if (widget.chatType == ChatType.private) return true;
+    if (widget.chatType != ChatType.group) return false;
     return _isGroupManager();
+  }
+
+  bool _isMessagePinned(Message msg) {
+    final topId = _currentTopMessageId();
+    return topId != null && msg.id != null && topId == msg.id;
+  }
+
+  int? _currentTopMessageId() {
+    if (widget.chatType == ChatType.group) {
+      return ref
+          .read(groupStoreProvider.notifier)
+          .byId(widget.targetId)
+          ?.topMessage
+          ?.id;
+    }
+    if (widget.chatType == ChatType.private) {
+      return ref
+          .read(friendStoreProvider.notifier)
+          .byId(widget.targetId)
+          ?.topMessage
+          ?.id;
+    }
+    return null;
   }
 
   bool _isGroupManager() {
@@ -2211,23 +2280,38 @@ class _ChatBoxPageState extends ConsumerState<ChatBoxPage> {
     _toast('功能开发中');
   }
 
-  Future<void> _onCloseTopMessage(Group group) async {
+  Future<void> _onCloseTopMessage({required bool isGroup}) async {
     final store = ref.read(chatStoreProvider);
-    if (_isGroupManager()) {
-      final ok = await showImConfirmDialog(
-        context,
-        title: '移除置顶',
-        content: '将在当前群聊的所有成员中移除此置顶消息,确认移除?',
-        confirmText: '移除',
-      );
-      if (ok == true && mounted) {
-        final err = await store.removeGroupTopMessage(group.id);
+    if (isGroup) {
+      if (_isGroupManager()) {
+        final ok = await showImConfirmDialog(
+          context,
+          title: '移除置顶',
+          content: '将在当前群聊的所有成员中移除此置顶消息,确认移除?',
+          confirmText: '移除',
+        );
+        if (ok == true && mounted) {
+          final err = await store.removeGroupTopMessage(widget.targetId);
+          if (err != null && mounted) {
+            _toast(err);
+          }
+        }
+      } else {
+        final err = await store.hideGroupTopMessage(widget.targetId);
         if (err != null && mounted) {
           _toast(err);
         }
       }
-    } else {
-      final err = await store.hideGroupTopMessage(group.id);
+      return;
+    }
+    final ok = await showImConfirmDialog(
+      context,
+      title: '取消置顶',
+      content: '将取消双方的消息置顶，确认移除?',
+      confirmText: '移除',
+    );
+    if (ok == true && mounted) {
+      final err = await store.removePrivateTopMessage(widget.targetId);
       if (err != null && mounted) {
         _toast(err);
       }
@@ -2343,6 +2427,11 @@ class _ChatBoxPageState extends ConsumerState<ChatBoxPage> {
       ref.watch(groupStoreProvider);
       group = ref.read(groupStoreProvider.notifier).byId(widget.targetId);
     }
+    Friend? friend;
+    if (isPrivate) {
+      ref.watch(friendStoreProvider);
+      friend = ref.read(friendStoreProvider.notifier).byId(widget.targetId);
+    }
     final showNavMore = !isGroup || group?.quit != true;
     final inputMaskTip = _notAllowInputTip(group, isGroup, isPrivate);
     final toolCount = _visibleToolCount(
@@ -2352,7 +2441,22 @@ class _ChatBoxPageState extends ConsumerState<ChatBoxPage> {
     );
     final toolsPanelHeight = _chatToolsHeight(context, toolCount);
 
-    final topMessage = isGroup ? group?.topMessage : null;
+    final topMessageType = isGroup
+        ? group?.topMessage?.type
+        : friend?.topMessage?.type;
+    final topMessageContent = isGroup
+        ? group?.topMessage?.content
+        : friend?.topMessage?.content;
+    final topMessageStatus = isGroup
+        ? group?.topMessage?.status
+        : friend?.topMessage?.status;
+    final topMessageId = isGroup
+        ? group?.topMessage?.id
+        : friend?.topMessage?.id;
+    final topMessageSendId = isGroup
+        ? group?.topMessage?.sendId
+        : friend?.topMessage?.sendId;
+    final hasTopMessage = topMessageId != null && topMessageType != null;
     final showAtTip = chat != null && (chat.atMe || chat.atAll);
     final showBottomTip =
         _autoScrollMode == _AutoScrollMode.reading && !_isInBottom;
@@ -2381,18 +2485,20 @@ class _ChatBoxPageState extends ConsumerState<ChatBoxPage> {
       ),
       body: Column(
         children: [
-          if (group != null && topMessage != null)
+          if (hasTopMessage)
             ChatTopMessageBar(
-              group: group,
-              topMessage: topMessage,
-              showName: _showNameForSendId(
-                topMessage.sendId,
-                selfSend: topMessage.sendId == selfId,
-                chatShowName: chat?.showName,
+              preview: QuoteMessageUtil.preview(
+                showName: _showNameForSendId(
+                  topMessageSendId ?? 0,
+                  selfSend: topMessageSendId == selfId,
+                  chatShowName: chat?.showName,
+                ),
+                type: topMessageType!,
+                content: topMessageContent,
+                status: topMessageStatus ?? 0,
               ),
-              canManage: _isGroupManager(),
-              onLocate: () => _locateMessageById(topMessage.id ?? 0),
-              onClose: () => _onCloseTopMessage(group!),
+              onLocate: () => _locateMessageById(topMessageId ?? 0),
+              onClose: () => _onCloseTopMessage(isGroup: isGroup),
             ),
           Expanded(
             child: GestureDetector(

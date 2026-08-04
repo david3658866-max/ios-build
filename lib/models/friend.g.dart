@@ -23,6 +23,11 @@ Friend _$FriendFromJson(Map<String, dynamic> json) => Friend(
   onlineApp: json['onlineApp'] == null
       ? false
       : JsonParse.asBool(json['onlineApp']),
+  topMessage: json['topMessage'] == null
+      ? null
+      : PrivateMessage.fromJson(
+          Map<String, dynamic>.from(json['topMessage'] as Map),
+        ),
 );
 
 Map<String, dynamic> _$FriendToJson(Friend instance) => <String, dynamic>{
@@ -38,4 +43,5 @@ Map<String, dynamic> _$FriendToJson(Friend instance) => <String, dynamic>{
   'online': instance.online,
   'onlineWeb': instance.onlineWeb,
   'onlineApp': instance.onlineApp,
+  'topMessage': instance.topMessage?.toJson(),
 };

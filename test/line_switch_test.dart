@@ -501,7 +501,7 @@ void main() {
     });
 
     test('切换不同线路 forceReconnect 到新 wsUrl', () async {
-      final target = kBuiltinProdLines.firstWhere((e) => e.id == 'line48');
+      final target = kBuiltinProdLines.firstWhere((e) => e.id == 'line458');
       final outcome =
           await container.read(lineProvider.notifier).switchTo(target.id);
       expect(outcome.success, isTrue);
@@ -512,14 +512,14 @@ void main() {
     });
 
     test('同线路且探活失败时触发 onLineSwitched', () async {
-      await container.read(lineProvider.notifier).switchTo('line46');
+      await container.read(lineProvider.notifier).switchTo('line448');
       ws.reconnectCount = 0;
       container.read(configStoreProvider.notifier).setLineStatus(
             WsStatus.disconnected,
           );
 
       final outcome =
-          await container.read(lineProvider.notifier).switchTo('line46');
+          await container.read(lineProvider.notifier).switchTo('line448');
       expect(outcome.success, isTrue);
       expect(outcome.switched, isFalse);
       expect(ws.reconnectCount, 1);
@@ -527,12 +527,12 @@ void main() {
 
     test('bestHealthyCandidate 排除失败线并按延迟选最快', () {
       container.read(lineProbeCacheProvider.notifier).upsertAll({
-        'line46': const LineProbeCacheEntry(
+        'line448': const LineProbeCacheEntry(
           ok: true,
           latencyMs: 200,
           checkedAtMs: 1,
         ),
-        'line48': const LineProbeCacheEntry(
+        'line458': const LineProbeCacheEntry(
           ok: true,
           latencyMs: 50,
           checkedAtMs: 1,
@@ -543,22 +543,22 @@ void main() {
         ),
       });
       final pick = container.read(lineProvider.notifier).bestHealthyCandidate(
-            excludeId: 'line46',
+            excludeId: 'line448',
           );
-      expect(pick?.id, 'line48');
+      expect(pick?.id, 'line458');
     });
 
     test('fallbackOnConnectionError 有探通候选时 adopt 并重连 WS', () async {
       // Debug 默认本地线；用生产线 id 模拟坏线。
-      await container.read(lineProvider.notifier).switchTo('line46');
+      await container.read(lineProvider.notifier).switchTo('line448');
       ws.reconnectCount = 0;
       final nowMs = DateTime.now().millisecondsSinceEpoch;
       container.read(lineProbeCacheProvider.notifier).upsertAll({
-        'line46': LineProbeCacheEntry(
+        'line448': LineProbeCacheEntry(
           ok: false,
           checkedAtMs: nowMs,
         ),
-        'line48': LineProbeCacheEntry(
+        'line458': LineProbeCacheEntry(
           ok: true,
           latencyMs: 40,
           checkedAtMs: nowMs,
@@ -568,17 +568,17 @@ void main() {
       final switched =
           await container.read(lineProvider.notifier).fallbackOnConnectionError();
       expect(switched, isTrue);
-      expect(container.read(lineProvider).id, 'line48');
+      expect(container.read(lineProvider).id, 'line458');
       expect(ws.reconnectCount, 1);
     });
 
     test('fallbackOnConnectionError 过期探活不 adopt', () async {
-      await container.read(lineProvider.notifier).switchTo('line46');
+      await container.read(lineProvider.notifier).switchTo('line448');
       final staleMs = DateTime.now()
           .subtract(const Duration(minutes: 10))
           .millisecondsSinceEpoch;
       container.read(lineProbeCacheProvider.notifier).upsertAll({
-        'line48': LineProbeCacheEntry(
+        'line458': LineProbeCacheEntry(
           ok: true,
           latencyMs: 40,
           checkedAtMs: staleMs,
@@ -587,20 +587,20 @@ void main() {
       final switched =
           await container.read(lineProvider.notifier).fallbackOnConnectionError();
       expect(switched, isFalse);
-      expect(container.read(lineProvider).id, 'line46');
+      expect(container.read(lineProvider).id, 'line448');
     });
 
     test('fallbackOnConnectionError 无候选时返回 false', () async {
-      await container.read(lineProvider.notifier).switchTo('line46');
+      await container.read(lineProvider.notifier).switchTo('line448');
       final nowMs = DateTime.now().millisecondsSinceEpoch;
       container.read(lineProbeCacheProvider.notifier).upsertAll({
-        'line46': LineProbeCacheEntry(ok: false, checkedAtMs: nowMs),
-        'line48': LineProbeCacheEntry(ok: false, checkedAtMs: nowMs),
+        'line448': LineProbeCacheEntry(ok: false, checkedAtMs: nowMs),
+        'line458': LineProbeCacheEntry(ok: false, checkedAtMs: nowMs),
       });
       final switched =
           await container.read(lineProvider.notifier).fallbackOnConnectionError();
       expect(switched, isFalse);
-      expect(container.read(lineProvider).id, 'line46');
+      expect(container.read(lineProvider).id, 'line448');
     });
   });
 

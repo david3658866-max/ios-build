@@ -205,10 +205,10 @@ void main() {
   });
 
   test('preferred builtin pool matches enabled seed count', () {
-    expect(kPreferredBuiltinLineIds.length, 40);
-    expect(isPreferredBuiltinLine('line46'), isTrue);
+    expect(kPreferredBuiltinLineIds.length, 35);
+    expect(isPreferredBuiltinLine('line448'), isTrue);
+    expect(isPreferredBuiltinLine('line119'), isTrue);
     expect(isPreferredBuiltinLine('line45'), isFalse);
-    expect(isPreferredBuiltinLine('line447'), isFalse);
   });
 
   test('auth two-phase: preferred ok skips fallback probes', () async {

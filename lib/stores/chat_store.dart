@@ -1399,6 +1399,40 @@ class ChatStore {
     }
   }
 
+  /// 置顶私聊消息（双方可见）。POST /friend/setTopMessage。
+  Future<String?> setPrivateTopMessage(int friendId, int messageId) async {
+    if (messageId <= 0) return '请等待该消息发送成功后操作';
+    try {
+      await ref.read(friendApiProvider).setTopMessage(friendId, messageId);
+      await ref.read(friendStoreProvider.notifier).refreshFriend(friendId);
+      return null;
+    } catch (e) {
+      return asApiException(e).message;
+    }
+  }
+
+  /// 移除私聊置顶（双方取消）。
+  Future<String?> removePrivateTopMessage(int friendId) async {
+    try {
+      await ref.read(friendApiProvider).removeTopMessage(friendId);
+      ref.read(friendStoreProvider.notifier).updateTopMessage(friendId, null);
+      return null;
+    } catch (e) {
+      return asApiException(e).message;
+    }
+  }
+
+  /// 隐藏私聊置顶（仅自己）。
+  Future<String?> hidePrivateTopMessage(int friendId) async {
+    try {
+      await ref.read(friendApiProvider).hideTopMessage(friendId);
+      ref.read(friendStoreProvider.notifier).updateTopMessage(friendId, null);
+      return null;
+    } catch (e) {
+      return asApiException(e).message;
+    }
+  }
+
   /// 请求撤回消息。DELETE /message/*/recall/{id}。
   Future<String?> requestRecall(Message msg) async {
     if (msg.id == null) return '请等待该消息发送成功后操作';
@@ -1595,6 +1629,10 @@ class ChatStore {
       lastSendTime: msg.sendTime,
       lastMsgType: MessageType.tipText,
     );
+    final friend = ref.read(friendStoreProvider.notifier).byId(friendId);
+    if (friend?.topMessage?.id == recalledId) {
+      ref.read(friendStoreProvider.notifier).updateTopMessage(friendId, null);
+    }
   }
 
   Future<void> recallGroup(GroupMessage msg) async {
@@ -1610,6 +1648,10 @@ class ChatStore {
       tipContent: tip,
       sendTime: msg.sendTime,
     );
+    final group = ref.read(groupStoreProvider.notifier).byId(msg.groupId);
+    if (group?.topMessage?.id == recalledId) {
+      ref.read(groupStoreProvider.notifier).updateTopMessage(msg.groupId, null);
+    }
     await _db.chatDao.updateLastPreview(
       type: ChatType.group,
       targetId: msg.groupId,

@@ -46,9 +46,9 @@ class ChatToolsPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     final bottom = MediaQuery.paddingOf(context).bottom;
     final tools = <Widget>[
-      ChatToolItem(icon: ImIcons.folder, label: '文件', onTap: onPickFile),
       ChatToolItem(icon: ImIcons.picture, label: '相册', onTap: onPickAlbum),
       ChatToolItem(icon: ImIcons.camera, label: '拍摄', onTap: onPickCamera),
+      ChatToolItem(icon: ImIcons.folder, label: '文件', onTap: onPickFile),
       ChatToolItem(icon: ImIcons.film, label: '视频', onTap: onPickVideo),
       ChatToolItem(
         icon: ImIcons.microphone,

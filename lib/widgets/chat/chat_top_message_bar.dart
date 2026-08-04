@@ -1,33 +1,23 @@
 import 'package:flutter/material.dart';
 
-import '../../core/utils/quote_message_util.dart';
-import '../../models/group.dart';
-import '../../models/group_message.dart';
 import '../../theme/im_colors.dart';
 import '../../theme/rpx.dart';
 
-/// 群置顶消息条。对齐 chat-top-message.vue。
+/// 置顶消息条（私聊/群聊共用）。对齐 chat-top-message.vue。
 class ChatTopMessageBar extends StatelessWidget {
   const ChatTopMessageBar({
     super.key,
-    required this.group,
-    required this.topMessage,
-    required this.showName,
-    required this.canManage,
+    required this.preview,
     required this.onLocate,
     required this.onClose,
   });
 
-  final Group group;
-  final GroupMessage topMessage;
-  final String showName;
-  final bool canManage;
+  final String preview;
   final VoidCallback onLocate;
   final VoidCallback onClose;
 
   @override
   Widget build(BuildContext context) {
-    final preview = _preview(topMessage, showName);
     return Container(
       margin: EdgeInsets.fromLTRB(
         rpx(context, 16),
@@ -71,15 +61,6 @@ class ChatTopMessageBar extends StatelessWidget {
           ),
         ],
       ),
-    );
-  }
-
-  String _preview(GroupMessage msg, String name) {
-    return QuoteMessageUtil.preview(
-      showName: name,
-      type: msg.type,
-      content: msg.content,
-      status: msg.status,
     );
   }
 }

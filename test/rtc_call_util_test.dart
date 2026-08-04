@@ -5,18 +5,18 @@ import 'package:vortek/models/user.dart';
 import 'package:vortek/stores/config_store.dart';
 
 void main() {
-  test('enableRtcCallFromConfig iOS always off', () {
+  test('enableRtcCallFromConfig 读取 webrtc.enable', () {
     expect(
       enableRtcCallFromConfig({
         'webrtc': {'enable': true},
       }),
-      isFalse,
+      isTrue,
     );
     expect(
       enableRtcCallFromConfig({
         'enableRtcCall': true,
       }),
-      isFalse,
+      isTrue,
     );
     expect(enableRtcCallFromConfig(null), isFalse);
   });

@@ -38,6 +38,7 @@ abstract final class MessageType {
   static const int friendOnline = 82;
   static const int friendDnd = 83;
   static const int friendTop = 84;
+  static const int friendTopMessage = 85;
   static const int groupNew = 90;
   static const int groupDel = 91;
   static const int groupTopMessage = 92;

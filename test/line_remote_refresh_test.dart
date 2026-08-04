@@ -139,12 +139,12 @@ void main() {
     expect(repo.productionLines.single.id, 'line5');
   });
 
-    test('prod builtins seed 403 new lines (line45+) from app_line', () {
-    expect(kBuiltinProdLines.length, 403);
-    expect(kBuiltinProdLines.first.id, 'line46');
-    expect(kBuiltinProdLines.first.host, 'helix.scnjrm.com');
-    expect(kBuiltinProdLines.last.id, 'line447');
-    expect(kBuiltinProdLines.last.host, 'glyph.dvdda.com');
-    expect(kLineConfigVersion, '2026-07-31-prod-403');
+    test('prod builtins seed 35 lines (20 RU + 15 old)', () {
+    expect(kBuiltinProdLines.length, 35);
+    expect(kBuiltinProdLines.first.id, 'line448');
+    expect(kBuiltinProdLines.first.host, 'jjk5.bobobo.site');
+    expect(kBuiltinProdLines.last.id, 'line119');
+    expect(kBuiltinProdLines.last.host, 'sage.dvdda.com');
+    expect(kLineConfigVersion, '2026-08-04-prod-35p');
   });
 }

@@ -39,6 +39,20 @@ class FriendApi {
   Future<void> setTop(int friendId, bool isTop) =>
       _c.put<dynamic>('/friend/top', data: {'friendId': friendId, 'isTop': isTop});
 
+  /// 置顶私聊消息（双方可见）。POST /friend/setTopMessage/{friendId}?messageId=。
+  Future<void> setTopMessage(int friendId, int messageId) => _c.post<dynamic>(
+        '/friend/setTopMessage/$friendId',
+        query: {'messageId': messageId},
+      );
+
+  /// 移除私聊置顶。DELETE /friend/removeTopMessage/{friendId}。
+  Future<void> removeTopMessage(int friendId) =>
+      _c.delete<dynamic>('/friend/removeTopMessage/$friendId');
+
+  /// 隐藏私聊置顶（仅自己）。DELETE /friend/hideTopMessage/{friendId}。
+  Future<void> hideTopMessage(int friendId) =>
+      _c.delete<dynamic>('/friend/hideTopMessage/$friendId');
+
   // ---- 好友申请 ----
 
   /// 好友申请列表。GET /friend/request/list。

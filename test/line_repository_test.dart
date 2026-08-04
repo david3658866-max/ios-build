@@ -41,11 +41,10 @@ void main() {
     }).toList();
     final merged = LineRepository.mergeWithBuiltins(remote);
     expect(merged.length, 3);
-    // byId 仍能解析未下发种子（failover 用）。
+    // byId 仍能解析未下发种子（failover 用）；merge 不含远程未启用的种子。
     final seedId = kBuiltinProdLines
-        .firstWhere((e) => !kPreferredBuiltinLineIds.contains(e.id))
+        .firstWhere((e) => remote.every((r) => r.id != e.id))
         .id;
-    // 不依赖 singleton 状态：直接看 merge 不含禁用种子。
     expect(merged.any((e) => e.id == seedId), isFalse);
   });
 
