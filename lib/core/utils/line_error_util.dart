@@ -9,12 +9,9 @@ import '../http/api_result.dart';
 ///
 /// 排障结论 [failReason]：成功不写；系统无网时优先 `device_offline`，否则回落为 [errorCategory]。
 abstract final class LineErrorUtil {
-  /// 系统报无网，且错误属于「连不上」类时，判定为疑似本机离线。
-  static bool offlineLikely({
-    String? networkType,
-    String? errorCategory,
-  }) {
-    if (networkType != 'none') return false;
+  /// 连接层失败类（无网/解析/超时等）；有网全挂时也可能落这类。
+  static bool isTransportFailCategory(String? errorCategory) {
+    if (errorCategory == null || errorCategory.isEmpty) return true;
     const cats = {
       'dns',
       'connection',
@@ -22,8 +19,31 @@ abstract final class LineErrorUtil {
       'timeout',
       'unknown',
     };
-    if (errorCategory == null || errorCategory.isEmpty) return true;
     return cats.contains(errorCategory);
+  }
+
+  /// 系统报无网，且错误属于「连不上」类时，判定为疑似本机离线。
+  static bool offlineLikely({
+    String? networkType,
+    String? errorCategory,
+  }) {
+    if (networkType != 'none') return false;
+    return isTransportFailCategory(errorCategory);
+  }
+
+  /// 一批探针结果是否「像本机离线」：0 通，且 [networkType]==none 或全部为连接层失败。
+  static bool batchLooksDeviceOffline({
+    required Iterable<bool> outcomesOk,
+    required Iterable<String?> errorCategories,
+    String? networkType,
+  }) {
+    final okList = outcomesOk.toList();
+    final cats = errorCategories.toList();
+    if (okList.isEmpty) return false;
+    if (okList.any((ok) => ok)) return false;
+    if (networkType == 'none') return true;
+    // 无系统无网标记时，不单凭分类熔断（避免线路真挂被误判），由 maxBatches 硬顶。
+    return false;
   }
 
   /// 探测失败的排障结论：`device_offline` / 原 [errorCategory] / `unknown`。

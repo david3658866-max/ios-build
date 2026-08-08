@@ -691,7 +691,7 @@ class LineNotifier extends Notifier<LineConfig> {
   /// 并发探活刷新 [lastHealthyLines] 与探活缓存；不改当前线路、不改 chip 状态。
   /// 供消息页 3s 自动切线在缺少候选时补探。
   ///
-  /// [exhaustive]=false：健康优先分批（每批 5、满 5 通停）；
+  /// [exhaustive]=false：健康优先分批（每批 5、满 5 通停，最多 3 批 / 无网 1 批）；
   /// [exhaustive]=true：全量并发（面板重新检测）。
   /// [fastAuth]=true：登录页首次探活（通 1 条即停、短超时）。
   Future<void> refreshHealthyLines({
@@ -713,6 +713,7 @@ class LineNotifier extends Notifier<LineConfig> {
       if (!ref.mounted) return;
       final manager = ref.read(lineManagerProvider);
       final prior = ref.read(lineProbeCacheProvider);
+      final networkType = await _deviceNetworkType();
       // 面板全量重检只打可见/启用表；日常与登录探活用启用∪400+种子。
       final probeLines = exhaustive
           ? kVisibleLines
@@ -723,10 +724,12 @@ class LineNotifier extends Notifier<LineConfig> {
               ? await manager.probeAllBatchedForAuth(
                   lines: probeLines,
                   priorHealth: prior,
+                  deviceNetworkType: networkType,
                 )
               : await manager.probeAllBatched(
                   lines: probeLines,
                   priorHealth: prior,
+                  deviceNetworkType: networkType,
                 );
       if (!ref.mounted) return;
 
@@ -802,6 +805,20 @@ class LineNotifier extends Notifier<LineConfig> {
     }
   }
 
+  /// 与线路事件上报一致的本机网络类型：wifi / mobile / none / unknown。
+  Future<String> _deviceNetworkType() async {
+    try {
+      final values = await Connectivity().checkConnectivity();
+      if (values.contains(ConnectivityResult.wifi)) return 'wifi';
+      if (values.contains(ConnectivityResult.mobile)) return 'mobile';
+      if (values.contains(ConnectivityResult.ethernet)) return 'wifi';
+      if (values.isEmpty || values.every((e) => e == ConnectivityResult.none)) {
+        return 'none';
+      }
+    } catch (_) {}
+    return 'unknown';
+  }
+
   /// 回前台轻量静默探：最多 1 批 5 条；不切线、不改 chip、不 Toast。
   Future<void> silentProbeOnResume() {
     return _silentProbeFuture ??= () async {
@@ -847,10 +864,12 @@ class LineNotifier extends Notifier<LineConfig> {
     try {
       final manager = ref.read(lineManagerProvider);
       final prior = ref.read(lineProbeCacheProvider);
+      final networkType = await _deviceNetworkType();
       final results = await manager.probeAllBatched(
         lines: LineRepository.instance.probeCandidateLines,
         priorHealth: prior,
         maxBatches: 1,
+        deviceNetworkType: networkType,
       );
       if (!ref.mounted) return;
 

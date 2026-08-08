@@ -146,6 +146,12 @@ class LineManager {
   static const int batchProbeSize = 5;
   static const int batchProbeStopWhenHealthy = 5;
 
+  /// 日常分批探活批数硬顶（5×3=15）：全不通时禁止掏空候选池。
+  static const int dailyBatchMaxBatches = 3;
+
+  /// 系统判定无网时：满 [offlineStopAfterBatches] 批 0 通则停，且登录阶段不扩兜底。
+  static const int offlineStopAfterBatches = 1;
+
   /// 登录/注册首次探活：通 1 条立刻可选线，缩短「连接中」。
   /// 超时偏短；优先池/兜底都限批，避免客户干等十几秒。
   static const Duration authBatchProbeTimeout = Duration(milliseconds: 1500);
@@ -156,8 +162,8 @@ class LineManager {
   /// 优先池最多探批数（约 12 条好线）；再不通立刻扩兜底。
   static const int authPreferredMaxBatches = 2;
 
-  /// 兜底最多探批数（约 18 条种子）；优先池不稳时多挖内置池。
-  static const int authFallbackMaxBatches = 3;
+  /// 兜底最多探批数（约 12 条种子）；与优先合计全挂约 ≤24，加上无网熔断更短。
+  static const int authFallbackMaxBatches = 2;
 
   /// 最近一次探活成功的本地开发线路（127.0.0.1 或局域网 IP）。
   LineConfig? resolvedLocalDevLine;
@@ -355,12 +361,14 @@ class LineManager {
   /// 分批探活：健康优先、域名族打散、每批 [batchSize] 条，凑满 [stopWhenHealthy] 通即停。
   ///
   /// 登录/自动切线用，缩短「连接中」；未探到的线不出现在结果里。
+  /// 默认最多 [dailyBatchMaxBatches] 批；[deviceNetworkType]==none 时还可无网熔断。
   Future<List<({LineConfig line, LineProbeOutcome outcome})>> probeAllBatched({
     List<LineConfig>? lines,
     Map<String, LineProbeCacheEntry?> priorHealth = const {},
     int batchSize = batchProbeSize,
     int stopWhenHealthy = batchProbeStopWhenHealthy,
-    int maxBatches = 1 << 20,
+    int maxBatches = dailyBatchMaxBatches,
+    String? deviceNetworkType,
     Random? random,
     Duration timeout = batchProbeTimeout,
     int maxAttempts = batchProbeMaxAttempts,
@@ -372,6 +380,7 @@ class LineManager {
       batchSize: batchSize,
       stopWhenHealthy: stopWhenHealthy,
       maxBatches: maxBatches,
+      deviceNetworkType: deviceNetworkType,
       random: random,
       probe: (line) => probeDetailed(
         line,
@@ -385,15 +394,18 @@ class LineManager {
   /// 登录/注册页快速探活：通 1 条即停，短超时、不重试。
   ///
   /// 先探 [kPreferredBuiltinLineIds] 优先池；全不通再扩到其余内置。
+  /// [deviceNetworkType]==none 时优先池 1 批即停且不扩兜底。
   Future<List<({LineConfig line, LineProbeOutcome outcome})>>
       probeAllBatchedForAuth({
     List<LineConfig>? lines,
     Map<String, LineProbeCacheEntry?> priorHealth = const {},
+    String? deviceNetworkType,
     Random? random,
   }) {
     return runAuthTwoPhaseBatchedProbe(
       lines: lines ?? kLines,
       priorHealth: priorHealth,
+      deviceNetworkType: deviceNetworkType,
       random: random,
       probe: (line) => probeDetailed(
         line,
@@ -424,16 +436,20 @@ class LineManager {
 }
 
 /// 登录探活两阶段：优先池有通线则不碰兜底；优先池限批不通再短扩探。
+///
+/// [deviceNetworkType]==`none` 时优先池仅 1 批且不进兜底，避免无网刷满种子。
 Future<List<({LineConfig line, LineProbeOutcome outcome})>>
     runAuthTwoPhaseBatchedProbe({
   required List<LineConfig> lines,
   required Future<LineProbeOutcome> Function(LineConfig line) probe,
   Map<String, LineProbeCacheEntry?> priorHealth = const {},
+  String? deviceNetworkType,
   Random? random,
   bool Function(String id) isPreferred = isPreferredBuiltinLine,
 }) async {
   final preferred = lines.where((l) => isPreferred(l.id)).toList();
   final others = lines.where((l) => !isPreferred(l.id)).toList();
+  final offline = deviceNetworkType == 'none';
   Future<List<({LineConfig line, LineProbeOutcome outcome})>> phase(
     List<LineConfig> phaseLines, {
     required int maxBatches,
@@ -444,19 +460,37 @@ Future<List<({LineConfig line, LineProbeOutcome outcome})>>
       batchSize: LineManager.authBatchProbeSize,
       stopWhenHealthy: LineManager.authBatchProbeStopWhenHealthy,
       maxBatches: maxBatches,
+      deviceNetworkType: deviceNetworkType,
       random: random,
       probe: probe,
     );
   }
 
   if (preferred.isEmpty) {
-    return phase(lines, maxBatches: LineManager.authFallbackMaxBatches);
+    return phase(
+      lines,
+      maxBatches: offline ? LineManager.offlineStopAfterBatches : LineManager.authFallbackMaxBatches,
+    );
   }
   final first = await phase(
     preferred,
-    maxBatches: LineManager.authPreferredMaxBatches,
+    maxBatches: offline
+        ? LineManager.offlineStopAfterBatches
+        : LineManager.authPreferredMaxBatches,
   );
   if (first.any((r) => r.outcome.ok) || others.isEmpty) {
+    return first;
+  }
+  if (offline ||
+      LineErrorUtil.batchLooksDeviceOffline(
+        outcomesOk: first.map((r) => r.outcome.ok),
+        errorCategories: first.map((r) => r.outcome.errorCategory),
+        networkType: deviceNetworkType,
+      )) {
+    log.i(
+      '[Line] auth stop after preferred (offline/no expand) '
+      'probed=${first.length}',
+    );
     return first;
   }
   log.i(
@@ -478,13 +512,17 @@ Future<List<({LineConfig line, LineProbeOutcome outcome})>> runBatchedProbe({
   Map<String, LineProbeCacheEntry?> priorHealth = const {},
   int batchSize = LineManager.batchProbeSize,
   int stopWhenHealthy = LineManager.batchProbeStopWhenHealthy,
-  int maxBatches = 1 << 20,
+  int maxBatches = LineManager.dailyBatchMaxBatches,
+  int offlineStopAfterBatches = LineManager.offlineStopAfterBatches,
+  String? deviceNetworkType,
   Random? random,
 }) async {
   if (lines.isEmpty) return const [];
   final size = batchSize < 1 ? 1 : batchSize;
   final stopAt = stopWhenHealthy < 1 ? 1 : stopWhenHealthy;
   final batchLimit = maxBatches < 1 ? 1 : maxBatches;
+  final offlineBatchLimit =
+      offlineStopAfterBatches < 1 ? 1 : offlineStopAfterBatches;
   final ordered = orderLinesForProbe(
     lines,
     priorHealth,
@@ -504,11 +542,19 @@ Future<List<({LineConfig line, LineProbeOutcome outcome})>> runBatchedProbe({
     for (final r in batchResults) {
       if (r.outcome.ok) healthyCount++;
     }
-    if (healthyCount >= stopAt || batches >= batchLimit) {
+    final offlineCap = LineErrorUtil.batchLooksDeviceOffline(
+          outcomesOk: batchResults.map((r) => r.outcome.ok),
+          errorCategories: batchResults.map((r) => r.outcome.errorCategory),
+          networkType: deviceNetworkType,
+        ) &&
+        healthyCount == 0 &&
+        batches >= offlineBatchLimit;
+    if (healthyCount >= stopAt || batches >= batchLimit || offlineCap) {
       log.i(
         '[Line] probeAllBatched stop '
         'ok=$healthyCount probed=${results.length}/${ordered.length} '
-        'batches=$batches',
+        'batches=$batches'
+        '${offlineCap ? ' offlineCap' : ''}',
       );
       break;
     }

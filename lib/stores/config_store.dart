@@ -82,7 +82,8 @@ class ConfigStore extends Notifier<ConfigState> {
   }
 }
 
-/// iOS 第三方重签包关闭音视频（无 hybrid RTC 资源）。
+/// 是否显示音视频通话入口。对齐 uniapp chat-box enableRtcCall + webrtc.enable。
+/// iOS third-party signing build: RTC always off (no hybrid assets).
 bool enableRtcCallFromConfig(Map<String, dynamic>? systemConfig) => false;
 
 final configStoreProvider =

@@ -347,17 +347,17 @@ class ChatStore {
       );
 
   /// 进入会话：清未读 + 同步已读水位 + 标记已读（HTTP）。
+  ///
+  /// 必须**无条件** PUT readed：补洞路径 `insertPrivate(incrementUnread:false)`
+  /// 会先把本地角标清掉再入库，若仍要求 hadUnread 才上报，客户已可见可回，
+  /// 服务端却一直 PENDING/DELIVERED，财务 Web 会永久显示「未读」。
   Future<void> activePrivateChat(int friendId) async {
-    final chat = await findChat(ChatType.private, friendId);
-    final hadUnread = (chat?.unreadCount ?? 0) > 0;
     await resetUnread(ChatType.private, friendId);
     await syncPrivateReadStatus(friendId);
-    if (hadUnread) {
-      try {
-        await ref.read(messageApiProvider).readedPrivate(friendId);
-      } catch (_) {
-        // 离线时忽略
-      }
+    try {
+      await ref.read(messageApiProvider).readedPrivate(friendId);
+    } catch (_) {
+      // 离线时忽略
     }
   }
 
@@ -843,6 +843,10 @@ class ChatStore {
           quoteMessage: sent.quoteMessage,
         );
         await _db.chatDao.bumpLastMsgId(ChatType.private, friendId, sent.id);
+        // 服务端 send 已顺带已读；这里再 PUT 一次，兼容旧 jar，并清本地角标。
+        try {
+          await ref.read(messageApiProvider).readedPrivate(friendId);
+        } catch (_) {}
         log.i('[Chat] sendPrivate ok id=${sent.id} status=${sent.status}');
         return null;
       } catch (e, st) {

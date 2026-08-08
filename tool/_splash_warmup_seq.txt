@@ -1,0 +1,21 @@
+command: "powershell -ExecutionPolicy Bypass -File .\\scripts\\run-device.ps1 -DeviceId ZE223JPF9T --dart-define=ENABLE_APP_LOG=true 2>&1 | Tee-Object -FilePath \"E:\\0000IM\\00code\\my-im\\im-flutter\\tool\\_splash_warmup_flutter.txt\""
+?[Smoke] bootstrap -> login (warmup lines on splash)
+?[Line] probe line_local@127.0.0.1 failed(connection): DioException [connection error]: The connection errored: Connection closed before full header was received This indicates an error which most likely cannot be solved by the library.
+?[Line] probe line_local@127.0.0.1 attempt 1/2 failed(connection), retry in 400ms
+?[Auth] auth line warmup timeout, show login
+?[Smoke] bootstrap done -> login
+?[Line] api failover: no healthy candidate
+?[Line] probe line_local@127.0.0.1 failed(timeout): DioException [receive timeout]: The request took longer than 0:00:04.000000 to receive data. It was aborted. To get rid of this exception, try raising the RequestOptions.receiveTimeout above the duration of 0:00:04.000000 or improve the response time of the server.
+?[Line] local unavailable, fallback to probeAll remotes
+?[Line] probe 线路107 (nexus.dvdda.com): ok 1012ms
+?[Line] probe 线路60 (atlas.bgznp.com): ok 1145ms
+?[Line] probe 线路109 (oak.scnjrm.com): ok 1166ms
+?[Line] probe 线路67 (flint.scnjrm.com): ok 1174ms
+?[Line] probe 线路117 (sage.bgznp.com): ok 1182ms
+?[Line] probe 线路119 (sage.dvdda.com): ok 1194ms
+?[Line] probeAllBatched stop ok=6 probed=6/40 batches=1
+?[Line] probeAllBatched 6/6 ok (of 40 candidates)
+?[Line] remote applied version=20260730-73 lines=line46,line48,line49,line50,line51,line52,line54,line55,line56,line57,line59,line60,line61,line62,line63,line64,line65,line66,line67,line68,line69,line70,line71,line72,line73,line74,line92,line95,line99,line102,line105,line107,line109,line112,line114,line115,line116,line117,line118,line119 via=https://nexus.dvdda.com/api
+?[Line] remote config via healthy line107@nexus.dvdda.com
+?[Line] switch -> line107
+?[Line] auto select 线路107(nexus.dvdda.com) 1012ms (was line_local)

@@ -4,7 +4,7 @@ abstract final class AppConstants {
   static const String appName = '星语';
 
   /// 客户端版本号（随登录上送 clientVersion）。后续接 package_info 后改为动态读取。
-  static const String appVersion = '1.0.11';
+  static const String appVersion = '1.0.12';
 
   /// 是否开放 App 检查/热更新（对齐 im-uniapp `.env.js` UPGRADE_ENABLED）。
   static const bool upgradeEnabled = false;

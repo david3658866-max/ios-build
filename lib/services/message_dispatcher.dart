@@ -209,6 +209,10 @@ class MessageDispatcher {
         status: msg.status,
         isDnd: friend?.isDnd ?? false,
       );
+      // 对方继续说话时补拉已读水位：RECEIPT 丢失或发送端本地卡在 PENDING 时纠正 UI。
+      if (msg.sendId != selfId) {
+        await chat.syncPrivateReadStatus(friendId);
+      }
     }
   }
 

@@ -128,12 +128,72 @@ void main() {
   test('batch constants match plan', () {
     expect(LineManager.batchProbeSize, 5);
     expect(LineManager.batchProbeStopWhenHealthy, 5);
+    expect(LineManager.dailyBatchMaxBatches, 3);
+    expect(LineManager.offlineStopAfterBatches, 1);
     expect(LineManager.authBatchProbeStopWhenHealthy, 1);
     expect(LineManager.authBatchProbeMaxAttempts, 1);
     expect(LineManager.authBatchProbeSize, 6);
     expect(LineManager.authBatchProbeTimeout.inMilliseconds, 1500);
     expect(LineManager.authPreferredMaxBatches, 2);
-    expect(LineManager.authFallbackMaxBatches, 3);
+    expect(LineManager.authFallbackMaxBatches, 2);
+  });
+
+  test('runBatchedProbe defaults cap at dailyBatchMaxBatches when all fail',
+      () async {
+    final lines = List.generate(40, (i) => _line('L${i + 1}'));
+    var calls = 0;
+    final results = await runBatchedProbe(
+      lines: lines,
+      priorHealth: const {},
+      random: Random(9),
+      probe: (line) async {
+        calls++;
+        return const LineProbeOutcome(errorCategory: 'timeout');
+      },
+    );
+    final maxCalls =
+        LineManager.batchProbeSize * LineManager.dailyBatchMaxBatches;
+    expect(calls, maxCalls);
+    expect(results.length, maxCalls);
+  });
+
+  test('runBatchedProbe stops after 1 offline batch when network=none',
+      () async {
+    final lines = List.generate(20, (i) => _line('L${i + 1}'));
+    var calls = 0;
+    final results = await runBatchedProbe(
+      lines: lines,
+      priorHealth: const {},
+      random: Random(2),
+      deviceNetworkType: 'none',
+      probe: (line) async {
+        calls++;
+        return const LineProbeOutcome(errorCategory: 'dns');
+      },
+    );
+    expect(calls, LineManager.batchProbeSize);
+    expect(results.length, LineManager.batchProbeSize);
+  });
+
+  test('auth offline does not expand to fallbacks', () async {
+    final preferredId = kPreferredBuiltinLineIds.first;
+    final lines = [
+      _line(preferredId),
+      ...List.generate(10, (i) => _line('fb$i')),
+    ];
+    final hit = <String>[];
+    await runAuthTwoPhaseBatchedProbe(
+      lines: lines,
+      priorHealth: const {},
+      random: Random(1),
+      deviceNetworkType: 'none',
+      probe: (line) async {
+        hit.add(line.id);
+        return const LineProbeOutcome(errorCategory: 'network');
+      },
+    );
+    expect(hit.length, lessThanOrEqualTo(LineManager.authBatchProbeSize));
+    expect(hit.any((id) => id.startsWith('fb')), isFalse);
   });
 
   test('lineHostFamily extracts registrable suffix', () {

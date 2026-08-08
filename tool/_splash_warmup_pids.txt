@@ -1,0 +1,2 @@
+﻿logcat=16356
+logcat_all=7900
